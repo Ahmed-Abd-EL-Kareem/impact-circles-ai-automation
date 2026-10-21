@@ -6,26 +6,49 @@ interface HeaderProps {
   onRefresh: () => void;
   isRefreshing: boolean;
   hasError?: boolean;
+  activeTab?: "finance" | "content";
+  onTabChange?: (tab: "finance" | "content") => void;
 }
 
-export function Header({ onRefresh, isRefreshing, hasError }: HeaderProps) {
+export function Header({
+  onRefresh,
+  isRefreshing,
+  hasError,
+  activeTab = "finance",
+  onTabChange,
+}: HeaderProps) {
   return (
     <header className="sticky top-0 z-40 border-b border-black/[0.06] bg-white/70 backdrop-blur-xl transition-colors dark:border-white/[0.08] dark:bg-[#090a0f]/80">
       <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3.5 sm:px-6 lg:px-8">
         {/* Brand & Title */}
         <div className="flex items-center gap-3.5">
           <div className="relative flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-zinc-900 to-zinc-800 text-white shadow-xs dark:from-white dark:to-zinc-200 dark:text-zinc-950">
-            <svg
-              className="h-5 w-5"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
-            </svg>
+            {activeTab === "finance" ? (
+              <svg
+                className="h-5 w-5"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+              </svg>
+            ) : (
+              <svg
+                className="h-5 w-5"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
+                <polyline points="22,6 12,13 2,6" />
+              </svg>
+            )}
           </div>
 
           <div>
@@ -34,14 +57,42 @@ export function Header({ onRefresh, isRefreshing, hasError }: HeaderProps) {
                 Impact Circles
               </h1>
               <span className="rounded-md border border-zinc-200/80 bg-zinc-100/80 px-1.5 py-0.5 font-mono text-[10px] font-medium text-zinc-600 dark:border-zinc-800 dark:bg-zinc-800/80 dark:text-zinc-300">
-                Phase 2
+                {activeTab === "finance" ? "Phase 2" : "Phase 3"}
               </span>
             </div>
             <p className="text-[11px] text-zinc-500 dark:text-zinc-400 font-normal">
-              Autonomous Financial Document Assistant • Multimodal Extraction
+              {activeTab === "finance"
+                ? "Autonomous Financial Document Assistant • Multimodal Extraction"
+                : "AI Content Generation & Automated Publishing Agent • Human Approval"}
             </p>
           </div>
         </div>
+
+        {/* View Switcher Tabs */}
+        {onTabChange && (
+          <nav aria-label="Workflows" className="hidden sm:flex items-center gap-1 rounded-xl border border-black/[0.08] bg-zinc-100/80 p-1 dark:border-white/[0.08] dark:bg-zinc-900/80">
+            <button
+              onClick={() => onTabChange("finance")}
+              className={`rounded-lg px-3 py-1 text-xs font-medium transition-all cursor-pointer ${
+                activeTab === "finance"
+                  ? "bg-white text-zinc-900 shadow-xs dark:bg-zinc-800 dark:text-zinc-100"
+                  : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"
+              }`}
+            >
+              Finance Assistant
+            </button>
+            <button
+              onClick={() => onTabChange("content")}
+              className={`rounded-lg px-3 py-1 text-xs font-medium transition-all cursor-pointer ${
+                activeTab === "content"
+                  ? "bg-white text-zinc-900 shadow-xs dark:bg-zinc-800 dark:text-zinc-100"
+                  : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"
+              }`}
+            >
+              Content & Publishing
+            </button>
+          </nav>
+        )}
 
         {/* Architecture Badges & Actions */}
         <div className="flex items-center gap-2.5 sm:gap-3">

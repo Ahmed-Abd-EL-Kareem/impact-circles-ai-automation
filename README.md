@@ -267,3 +267,46 @@ npm run build
 - **Request Idempotency**: Atomic `ON CONFLICT ("idempotencyKey")` guarantees that retries return the original record without creating duplicate entries.
 - **Multi-Currency Invariant**: Cross-currency addition is strictly forbidden without real-time exchange rates. Volumes are displayed separately per currency code.
 - **Honest Null Policy**: Missing or unreadable fields remain `null` with status `needs_review`. The AI is never permitted to hallucinate invoice numbers, dates, or amounts.
+
+---
+
+## 11. Phase 3 — AI Content Generation & Automated Publishing Agent
+
+Phase 3 implements the **AI Content Generation & Automated Publishing Agent** specified in the Impact Circles Technical Assessment:
+
+### Capabilities & Workflow
+1. **Content Input**: Accepts raw research project descriptions, field milestones, research findings, or event announcements.
+2. **AI Generation (Google Gemini)**: Automatically produces three tailored versions with distinct tone, structure, and formatting:
+   - **LinkedIn Post**: Professional, engaging, hashtag-optimized with thought-leadership hooks and character telemetry.
+   - **Newsletter Summary**: Concise, high signal-to-noise ratio stakeholder briefing with subject, preview, body, and CTA.
+   - **Website Announcement**: Comprehensive editorial article in Markdown with headlines, deks, slug, and tags.
+3. **Centralized Persistence**: Stored in Neon PostgreSQL via Prisma (`ContentPost` & `PublishingLog` models).
+4. **Human Approval Workflow**:
+   - An authorized team member reviews the generated versions in the interactive review sheet.
+   - The team member can edit any field (title, channel copy, slug, etc.) where necessary.
+   - **Strict Approval Guardrail**: Publication cannot occur without explicit human approval.
+   - **Re-Approval Invariant**: Any edit made to an approved post immediately resets its status to `in_review`, requiring renewed approval before publishing.
+5. **Automated Publishing**:
+   - Once approved, clicking **Publish to Selected Channels** executes multi-channel automated dispatch.
+   - Dispatches to configured live CMS / social webhooks, or executes in demonstration sandbox mode generating verified URLs.
+   - Persists execution timestamps, status (`success` / `simulated` / `failed`), and published URLs into `PublishingLog`.
+
+### n8n Content Publishing Workflow
+The automated workflow definition is provided in `n8n/workflows/content-publishing.json`:
+- **Webhook Endpoint**: `POST /webhook/impact-circles-content-publishing`
+- **Authentication**: Secured with `x-webhook-secret` header matching `N8N_WEBHOOK_SECRET` (fail-closed).
+- **Two Pipeline Actions**:
+  - `action: "generate"`: Calls Google Gemini API, validates and sanitizes 3 tailored channel outputs, and persists the draft into Neon PostgreSQL (`ContentPost`).
+  - `action: "publish"`: Fetches `ContentPost`, enforces strict human approval check (`status === 'approved'`), dispatches to selected channels (Website CMS, LinkedIn, Newsletter), logs results into `PublishingLog`, and updates `ContentPost` status to `published`.
+- **To Import**: Open n8n (`http://localhost:5678`), navigate to **Workflows** → **Import from File**, select `n8n/workflows/content-publishing.json`, connect the `Neon Postgres (Database)` credential, and set to **Active**.
+
+### Manual Verification Checklist
+1. Open [http://localhost:3000](http://localhost:3000) and click the **Content & Publishing** tab in the top navigation.
+2. Click any of the sample quick-picks (e.g. *Clean Water Sensor Milestone*) or paste custom research findings into the text area.
+3. Click **Generate Tailored Content**. Google Gemini produces the 3-channel content package in real time and persists it to Neon PostgreSQL.
+4. The **Review & Approve** modal opens automatically:
+   - Switch between **Website Announcement**, **LinkedIn Post**, and **Newsletter Update** tabs.
+   - Edit any text field and click **Save Edits**.
+   - Notice that if the post was previously approved, saving edits flags that re-approval is required.
+5. Click **Approve Content**. The status transitions to `Approved`.
+6. Click **Publish to Selected Channels**. The automated dispatcher executes, records publication URLs (e.g. `https://impactcircles.org/announcements/...`), and displays the result in the **Publishing Audit** tab.

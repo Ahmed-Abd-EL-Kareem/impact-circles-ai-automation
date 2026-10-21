@@ -25,12 +25,22 @@ const pool =
 
 const adapter = new PrismaPg(pool);
 
-export const prisma =
-  globalForPrisma.prisma ??
-  new PrismaClient({
+function createPrismaClient(): PrismaClient {
+  return new PrismaClient({
     adapter,
     log: process.env.NODE_ENV === "development" ? ["warn", "error"] : ["error"],
   });
+}
+
+// In development, invalidate cached PrismaClient if schema was updated with new models
+const cachedPrisma = globalForPrisma.prisma;
+const isCachedClientStale =
+  !cachedPrisma ||
+  !("contentPost" in cachedPrisma) ||
+  !("publishingLog" in cachedPrisma) ||
+  !("expense" in cachedPrisma);
+
+export const prisma = isCachedClientStale ? createPrismaClient() : cachedPrisma;
 
 if (process.env.NODE_ENV !== "production") {
   globalForPrisma.prisma = prisma;

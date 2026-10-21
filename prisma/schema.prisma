@@ -30,3 +30,42 @@ model Expense {
   @@index([expenseDate])
   @@index([category])
 }
+
+model ContentPost {
+  id                String          @id @default(cuid())
+  title             String
+  sourcePrompt      String          @db.Text
+  contentType       String          @default("research_update")
+  status            String          @default("draft")
+  linkedinContent   String?         @db.Text
+  newsletterContent String?         @db.Text
+  websiteContent    String?         @db.Text
+  targetChannels    Json            @default("[\"linkedin\",\"newsletter\",\"website\"]")
+  metadata          Json            @default("{}")
+  rejectionReason   String?
+  approvedAt        DateTime?
+  publishedAt       DateTime?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  publishingLogs    PublishingLog[]
+
+  @@index([status])
+  @@index([contentType])
+  @@index([createdAt])
+}
+
+model PublishingLog {
+  id              String      @id @default(cuid())
+  postId          String
+  post            ContentPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  channel         String
+  status          String
+  publishedUrl    String?
+  responsePayload Json?
+  errorMessage    String?
+  createdAt       DateTime    @default(now())
+
+  @@index([postId])
+  @@index([channel])
+  @@index([createdAt])
+}
