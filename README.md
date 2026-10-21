@@ -176,35 +176,44 @@ n8n will start and be accessible at [http://localhost:5678](http://localhost:567
 ## 8. Testing & Quality Verification
 
 ### Run Unit Tests
-A comprehensive test suite of 37 unit tests across 5 suites:
+A comprehensive test suite of 50 unit tests across 7 suites:
 
 ```powershell
 npm test
 ```
 
 Covers:
-- Binary magic-byte inspection and spoofed extension rejection.
-- Structured extraction schema validation, arithmetic reconciliation (\$0.02 tolerance), and honest nulls.
-- Duplicate detection: primary candidate matching and secondary missing-invoice-number matching.
-- Multi-currency isolation: zero cross-currency pollution.
-- n8n workflow client: authentication, timeouts, and error propagation.
+- **File Validation** (`tests/unit/validation-file.test.ts`): Binary magic-byte inspection (%PDF-, PNG, JPEG), 10MB bounds, and spoofed extension rejection.
+- **Extraction Validation** (`tests/unit/validation-extraction.test.ts`): Structured extraction schema validation, arithmetic reconciliation ($0.02 tolerance), UTC calendar validation, and honest nulls.
+- **Duplicate Detection** (`tests/unit/duplicate-detection.test.ts`): Primary candidate matching, secondary missing-invoice-number matching, and mismatch immunity.
+- **Multi-Currency** (`tests/unit/finance-summary.test.ts`): Strict currency isolation and zero cross-currency addition.
+- **Workflow Client** (`tests/unit/workflow-client.test.ts`): n8n offline 503 handling, 401 secret rejection, upstream error propagation, and response verification.
+- **Webhook Authentication & Fail-Closed Guardrails** (`tests/unit/webhook-auth.test.ts`): Fail-closed 500 when secret is unconfigured/empty, 401 when header is missing/mismatched, 400 when payload is malformed.
+- **Request Idempotency & Concurrency** (`tests/unit/idempotency.test.ts`): Atomic replay guarantees, race condition safety, payload tampering prevention, and timeout recovery.
 
-### Run End-to-End Integration Test
-Runs a live end-to-end test against real Gemini and Neon PostgreSQL:
+### Run Integration Tests
+The repository provides focused integration scripts and a unified runner:
 
 ```powershell
+# Run the direct TypeScript pipeline against real Gemini & Neon PostgreSQL
+npm run test:direct
+
+# Run the true production n8n End-to-End test (requires n8n on port 5678)
+npm run test:e2e
+
+# Run the complete integration suite (both suites sequentially)
 npm run test:integration
 ```
 
-This automated verification:
-1. Verifies connectivity to Neon PostgreSQL.
-2. Ingests `test-fixtures/fictional-invoice.pdf`.
-3. Calls Google Gemini to extract structured invoice data.
-4. Asserts request-level idempotency replay (identical record returned, zero count increment).
-5. Submits duplicate fixture and asserts `duplicate_suspected` flag and candidate ID capture.
-6. Verifies strict currency grouping (no cross-currency addition).
-7. Probes the live n8n workflow webhook, verifying HTTP 201 response and single persistence ownership.
-8. Cleans up all test-created records from Neon PostgreSQL automatically.
+The production n8n E2E suite (`npm run test:e2e`):
+1. Confirms live n8n server health (fails immediately with exit code 1 if n8n is offline — zero false positives).
+2. Verifies fail-closed authentication: rejects invalid secrets with HTTP 401.
+3. Verifies payload guardrails: rejects malformed bodies with HTTP 400.
+4. Ingests `test-fixtures/fictional-invoice.pdf` and verifies HTTP 201 response with verified persisted record.
+5. Asserts n8n request idempotency replay (identical record returned, zero count increment).
+6. Submits business duplicate and verifies `duplicate_suspected` flag and candidate ID capture.
+7. Verifies multi-currency summary calculation.
+8. Automatically cleans up test records from Neon PostgreSQL.
 
 ### Code Quality Verification
 ```powershell

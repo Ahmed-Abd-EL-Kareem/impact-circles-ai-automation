@@ -57,6 +57,7 @@ We audited, repaired, and hardened the production-grade vertical slice that inge
 ### E. Frontend Application (Next.js 16 App Router)
 - **Executive Summary Cards**: Displays real-time counts and segregated multi-currency financial totals.
 - **Upload Zone**: Drag-and-drop supporting PDF, PNG, and JPEG with client-side 10MB bounds and magic-byte checks.
+- **Request Idempotency & UI Retry Button**: Generates a persistent `req_<timestamp>_<random>` key on document selection, preserved across network timeouts or errors with a dedicated "Retry Upload" interactive button.
 - **Expense Ledger & Inspection**:
   - Dynamic status tabs (All, Valid, Needs Review, Duplicate Suspected, Failed).
   - Search filtering by vendor, invoice number, or description.
@@ -68,13 +69,13 @@ We audited, repaired, and hardened the production-grade vertical slice that inge
 
 ## 3. Test Suites & Verification
 
-### Unit Test Suite (37 tests across 5 test suites)
+### Unit Test Suite (50 tests across 7 test suites)
 Run with `npm test`:
 1. `tests/unit/validation-file.test.ts` (8 tests):
    - Valid PDF magic bytes (`%PDF-`), PNG, JPEG.
    - Spoofed extension rejection, empty buffer rejection, 10MB limit enforcement, filename sanitization.
 2. `tests/unit/validation-extraction.test.ts` (10 tests):
-   - Honest nulls, calendar date validation, strict decimal regex parsing, negative/zero amount rejection.
+   - Honest nulls, UTC calendar date validation, strict decimal regex parsing, negative/zero amount rejection.
    - Arithmetic 0.02 tolerance reconciliation, currency normalization, category fallbacks.
 3. `tests/unit/duplicate-detection.test.ts` (9 tests):
    - Primary matching, secondary date matching only when invoice number is absent, amount/currency mismatch immunity.
@@ -83,16 +84,36 @@ Run with `npm test`:
    - Strict currency isolation without cross-currency addition, null handling, empty list resilience.
 5. `tests/unit/workflow-client.test.ts` (7 tests):
    - n8n offline 503 handling, secret authentication failure 401 handling, upstream error propagation, malformed response handling, persistence confirmation checks.
+6. `tests/unit/webhook-auth.test.ts` (8 tests):
+   - Fail-closed evaluation when server secret is missing or empty string.
+   - Missing or mismatched `x-webhook-secret` header (HTTP 401 rejection).
+   - Case-insensitive header matching (`x-webhook-secret` / `X-Webhook-Secret`).
+   - Missing `fileData` or unsupported `mimeType` payload rejection (HTTP 400 rejection).
+7. `tests/unit/idempotency.test.ts` (5 tests):
+   - Replay returns identical persisted expense without duplicate insertion.
+   - Concurrent race protection without duplicates or database errors.
+   - Prevention of record tampering/overwrites on replay with modified payloads.
+   - Distinct records when different idempotency keys are supplied for identical documents.
+   - Timeout-after-persistence recovery.
 
 ### Integration Test Suite
-Run with `npm run test:integration`:
-- Connects to Neon PostgreSQL and confirms database state.
-- Ingests `test-fixtures/fictional-invoice.pdf` and extracts data via Google Gemini API.
-- Asserts request idempotency replay (same record returned, zero count increment).
-- Asserts primary duplicate candidate detection (flags `duplicate_suspected` with candidate ID).
-- Verifies financial summary calculation grouped strictly by currency.
-- Probes and executes live n8n workflow webhook on port 5678, confirming HTTP 201 and single-ownership persistence.
-- Cleans up all test-created records from Neon PostgreSQL in `finally` block.
+The repository provides modular and unified integration verification:
+- **Direct Pipeline Test (`npm run test:direct`)**:
+  - Probes Neon PostgreSQL and extracts data using Google Gemini API (`gemini-3.1-flash-lite`).
+  - Asserts request idempotency replay (same record returned, zero count increment).
+  - Asserts primary duplicate candidate detection (flags `duplicate_suspected` with candidate ID).
+  - Verifies multi-currency grouping in Neon PostgreSQL.
+  - Cleans up test records automatically.
+- **Production n8n End-to-End Test (`npm run test:e2e`)**:
+  - Probes live n8n workflow on port 5678 (fails immediately with exit code 1 if offline — zero false successes).
+  - Verifies fail-closed authentication rejection with HTTP 401 on missing/bad secret.
+  - Verifies malformed payload rejection with HTTP 400.
+  - Verifies valid PDF document ingestion returning HTTP 201 with verified persisted expense.
+  - Verifies n8n request idempotency replay with same key.
+  - Verifies business duplicate detection with distinct key.
+  - Cleans up E2E test records from Neon PostgreSQL.
+- **Master Test Runner (`npm run test:integration`)**:
+  - Executes both `test:direct` and `test:e2e` in sequence with 100% pass rate.
 
 ---
 
@@ -105,7 +126,7 @@ Run with `npm run test:integration`:
 | **Finance Summary API** | `src/app/api/finance/summary/route.ts` | Complete & Tested |
 | **Prisma Schema & Migrations** | `prisma/schema.prisma`, `prisma/migrations/` | Deployed to Neon DB |
 | **Gemini Extractor** | `src/lib/extraction/gemini.ts` | Verified with Gemini 3.1 Flash Lite |
-| **Validation & Duplicates** | `src/lib/validation/`, `src/lib/services/` | 100% Pass Rate (37 unit tests) |
-| **n8n Workflow Export** | `n8n/workflows/finance-processing.json` | Parameterized SQL & Idempotency |
-| **Integration Suite** | `scripts/test-integration.ts` | 100% Pass Rate |
+| **Validation & Duplicates** | `src/lib/validation/`, `src/lib/services/` | 100% Pass Rate (50 unit tests) |
+| **n8n Workflow Export** | `n8n/workflows/finance-processing.json` | Parameterized SQL & Fail-Closed Auth |
+| **Integration Suite** | `scripts/test-integration.ts`, `test-direct-pipeline.ts`, `test-n8n-e2e.ts` | 100% Pass Rate |
 | **Documentation & Guidelines** | `README.md`, `WHAT_WE_MADE.md`, `RULES.md` | Comprehensive |

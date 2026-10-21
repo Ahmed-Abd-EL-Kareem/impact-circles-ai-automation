@@ -7,12 +7,18 @@ interface DocumentUploadZoneProps {
   onUploadSuccess: (expense: ExpenseRecord) => void;
 }
 
+function generateIdempotencyKey(): string {
+  return `req_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
 export function DocumentUploadZone({ onUploadSuccess }: DocumentUploadZoneProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [processingStep, setProcessingStep] = useState<number>(0);
   const [stepLabel, setStepLabel] = useState<string>("");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [activeFile, setActiveFile] = useState<File | null>(null);
+  const [activeIdempotencyKey, setActiveIdempotencyKey] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleDragOver = (e: DragEvent<HTMLDivElement>) => {
@@ -34,21 +40,34 @@ export function DocumentUploadZone({ onUploadSuccess }: DocumentUploadZoneProps)
 
     const files = e.dataTransfer.files;
     if (files && files.length > 0) {
-      await uploadFile(files[0]);
+      await startUpload(files[0]);
     }
   };
 
   const handleFileInputChange = async (e: ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (files && files.length > 0) {
-      await uploadFile(files[0]);
+      await startUpload(files[0]);
     }
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
   };
 
-  const uploadFile = async (file: File) => {
+  const startUpload = async (file: File) => {
+    const newIdempotencyKey = generateIdempotencyKey();
+    setActiveFile(file);
+    setActiveIdempotencyKey(newIdempotencyKey);
+    await uploadFile(file, newIdempotencyKey);
+  };
+
+  const handleRetry = async () => {
+    if (activeFile && activeIdempotencyKey) {
+      await uploadFile(activeFile, activeIdempotencyKey);
+    }
+  };
+
+  const uploadFile = async (file: File, idempotencyKey: string) => {
     setErrorMessage(null);
     setIsProcessing(true);
     setProcessingStep(1);
@@ -75,6 +94,7 @@ export function DocumentUploadZone({ onUploadSuccess }: DocumentUploadZoneProps)
 
     const formData = new FormData();
     formData.append("file", file);
+    formData.append("idempotencyKey", idempotencyKey);
 
     // Step 2 progression simulation
     setTimeout(() => {
@@ -85,6 +105,9 @@ export function DocumentUploadZone({ onUploadSuccess }: DocumentUploadZoneProps)
     try {
       const response = await fetch("/api/invoices", {
         method: "POST",
+        headers: {
+          "x-idempotency-key": idempotencyKey,
+        },
         body: formData,
       });
 
@@ -103,6 +126,8 @@ export function DocumentUploadZone({ onUploadSuccess }: DocumentUploadZoneProps)
       setTimeout(() => {
         setIsProcessing(false);
         setProcessingStep(0);
+        setActiveFile(null);
+        setActiveIdempotencyKey(null);
         onUploadSuccess(data.expense);
       }, 600);
     } catch (err: unknown) {
@@ -210,9 +235,9 @@ export function DocumentUploadZone({ onUploadSuccess }: DocumentUploadZoneProps)
         )}
       </div>
 
-      {/* Error Callout Banner */}
+      {/* Error Callout Banner with Retry Action */}
       {errorMessage && (
-        <div className="animate-fade-in mt-3.5 flex items-start justify-between gap-3 rounded-xl border border-rose-200/90 bg-rose-50/90 p-4 text-xs text-rose-900 shadow-xs dark:border-rose-900/50 dark:bg-rose-950/40 dark:text-rose-200">
+        <div className="animate-fade-in mt-3.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 rounded-xl border border-rose-200/90 bg-rose-50/90 p-4 text-xs text-rose-900 shadow-xs dark:border-rose-900/50 dark:bg-rose-950/40 dark:text-rose-200">
           <div className="flex items-start gap-2.5">
             <svg
               className="mt-0.5 h-4 w-4 shrink-0 text-rose-600 dark:text-rose-400"
@@ -232,13 +257,24 @@ export function DocumentUploadZone({ onUploadSuccess }: DocumentUploadZoneProps)
               {errorMessage}
             </div>
           </div>
-          <button
-            onClick={() => setErrorMessage(null)}
-            className="text-rose-600 hover:text-rose-800 dark:text-rose-400 dark:hover:text-rose-200 cursor-pointer text-sm font-bold"
-            title="Dismiss error"
-          >
-            &times;
-          </button>
+
+          <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
+            {activeFile && activeIdempotencyKey && (
+              <button
+                onClick={handleRetry}
+                className="apple-press rounded-lg bg-rose-600 px-3 py-1 font-medium text-white hover:bg-rose-700 dark:bg-rose-700 dark:hover:bg-rose-600 cursor-pointer shadow-xs"
+              >
+                Retry Upload
+              </button>
+            )}
+            <button
+              onClick={() => setErrorMessage(null)}
+              className="text-rose-600 hover:text-rose-800 dark:text-rose-400 dark:hover:text-rose-200 cursor-pointer p-1 font-bold text-base"
+              title="Dismiss error"
+            >
+              &times;
+            </button>
+          </div>
         </div>
       )}
     </div>

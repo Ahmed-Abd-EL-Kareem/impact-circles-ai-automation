@@ -8,6 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "test": "node --test tests/unit/*.test.ts",
+    "test:direct": "npx tsx --env-file=.env scripts/test-direct-pipeline.ts",
+    "test:e2e": "npx tsx --env-file=.env scripts/test-n8n-e2e.ts",
     "test:integration": "npx tsx --env-file=.env scripts/test-integration.ts"
   },
   "dependencies": {

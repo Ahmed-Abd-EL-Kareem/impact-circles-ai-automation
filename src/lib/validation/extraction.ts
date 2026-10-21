@@ -433,14 +433,23 @@ export function validateExtractedExpense(
     }
   }
 
+  // Deduplicate issues by code, field, and message
+  const seenIssueKeys = new Set<string>();
+  const uniqueIssues = issues.filter((iss) => {
+    const key = `${iss.code}_${iss.field || ""}_${iss.message}`;
+    if (seenIssueKeys.has(key)) return false;
+    seenIssueKeys.add(key);
+    return true;
+  });
+
   // 12. Determine validation status
   // An expense is valid ONLY if all primary fields exist, there are zero errors, zero warnings, and core fields are positive & normalized.
-  const hasErrors = issues.some((i) => i.severity === "error");
+  const hasErrors = uniqueIssues.some((i) => i.severity === "error");
   const missingCoreFields =
     !vendor || !amountResult.amountStr || !currencyResult.currency;
 
   let validationStatus: ValidationStatus = "valid";
-  if (hasErrors || missingCoreFields || issues.length > 0) {
+  if (hasErrors || missingCoreFields || uniqueIssues.length > 0) {
     validationStatus = "needs_review";
   }
 
@@ -456,7 +465,7 @@ export function validateExtractedExpense(
     taxAmount: taxResult.amountStr,
     category: catResult.category,
     validationStatus,
-    validationIssues: issues,
+    validationIssues: uniqueIssues,
     sourceFileName,
   };
 }

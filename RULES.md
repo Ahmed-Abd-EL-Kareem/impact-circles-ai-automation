@@ -35,9 +35,10 @@ This document establishes the mandatory architectural rules, engineering standar
   - Fallback execution in Next.js is strictly for offline development resilience and must adhere to the exact same validation and schema rules.
 - **Workflow Security & SQL Parameterization**:
   - All database queries in n8n Postgres nodes MUST use bound parameters (`$1..$N`) via `options.queryReplacement`. NEVER interpolate variables directly into SQL strings.
-  - Webhook requests must validate the `x-webhook-secret` header against `process.env.N8N_WEBHOOK_SECRET` before executing AI or database nodes.
+  - Webhook requests must validate the `x-webhook-secret` header against `process.env.N8N_WEBHOOK_SECRET` before executing AI or database nodes. If secret is missing/empty, fail closed with HTTP 500; if header is missing or mismatched, reject with HTTP 401; if payload is malformed, reject with HTTP 400.
   - Ensure duplicate check queries return a deterministic single-row item (`SELECT (SELECT ...) AS "matchedCandidate"`) so zero-match cases do not stall workflow execution.
-  - Persistence queries must handle idempotency conflicts gracefully via `ON CONFLICT ("idempotencyKey") DO UPDATE SET "updatedAt" = "Expense"."updatedAt" RETURNING *`.
+  - Persistence queries must handle idempotency conflicts atomically via `ON CONFLICT ("idempotencyKey") DO UPDATE SET "updatedAt" = "Expense"."updatedAt" RETURNING *`.
+  - Format response node returns HTTP 201 with `{ success: true, expense: $json }` directly from the confirmed persisted record.
 
 ---
 
@@ -65,7 +66,11 @@ This document establishes the mandatory architectural rules, engineering standar
 - Flagged duplicates must still be persisted to ensure an immutable audit log, with their `validationStatus` set to `duplicate_suspected` and candidate IDs recorded in `validationIssues`.
 
 ### 2.4 Request Idempotency
-- Network retries with the same `idempotencyKey` must return the previously persisted record without creating duplicate entries in the database.
+- Generate one unique request idempotency key per logical upload operation (`req_<timestamp>_<random>`).
+- Preserve that key across network failures, timeouts, and user retries via the upload UI "Retry Upload" handler.
+- Enforce uniqueness atomically in Neon PostgreSQL via `@unique` constraint and `ON CONFLICT ("idempotencyKey") DO UPDATE SET "updatedAt" = "Expense"."updatedAt" RETURNING *`.
+- Replaying the identical idempotency key returns the previously persisted record without modifying fields or creating duplicate database rows.
+- Concurrency races must resolve safely without unhandled errors or duplicate records.
 
 ---
 
@@ -101,9 +106,11 @@ This document establishes the mandatory architectural rules, engineering standar
 ### 4.2 Quality Gates
 - **Type Checking**: `npx tsc --noEmit` must pass with 0 errors.
 - **Linting**: `npm run lint` must pass with 0 errors and 0 warnings.
-- **Unit Tests**: `npm test` must run all 37 tests across 5 test suites with 100% pass rate.
+- **Unit Tests**: `npm test` must run all 50 tests across 7 test suites with 100% pass rate.
 - **Turbopack Build**: `npm run build` must compile cleanly without errors.
-- **Integration Test**: `npm run test:integration` verifies live database, AI extraction, idempotency replay, and duplicate detection.
+- **Direct Pipeline Test**: `npm run test:direct` verifies Gemini extraction, schema validation, idempotency replay, and duplicate detection against Neon PostgreSQL.
+- **Production n8n E2E Test**: `npm run test:e2e` verifies live n8n fail-closed auth (401/400), valid document ingestion (201), idempotency replay, and duplicate detection. Fails non-zero if n8n is offline (zero false successes).
+- **Full Integration Suite**: `npm run test:integration` executes both direct and production n8n E2E suites sequentially.
 
 ### 4.3 Git Commit Discipline
 - Make atomic, descriptive commits following conventional commit syntax (`feat:`, `fix:`, `docs:`, `test:`, `refactor:`).
