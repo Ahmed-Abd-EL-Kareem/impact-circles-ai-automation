@@ -8,10 +8,12 @@ datasource db {
 
 model Expense {
   id               String    @id @default(cuid())
+  idempotencyKey   String?   @unique
   expenseDate      DateTime?
   vendor           String?
   invoiceNumber    String?
   description      String?
+  subtotalAmount   Decimal?  @db.Decimal(12, 2)
   amount           Decimal?  @db.Decimal(12, 2)
   currency         String?
   taxAmount        Decimal?  @db.Decimal(12, 2)

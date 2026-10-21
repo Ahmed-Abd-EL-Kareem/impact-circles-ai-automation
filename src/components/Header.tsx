@@ -5,9 +5,10 @@ import React from "react";
 interface HeaderProps {
   onRefresh: () => void;
   isRefreshing: boolean;
+  hasError?: boolean;
 }
 
-export function Header({ onRefresh, isRefreshing }: HeaderProps) {
+export function Header({ onRefresh, isRefreshing, hasError }: HeaderProps) {
   return (
     <header className="sticky top-0 z-40 border-b border-black/[0.06] bg-white/70 backdrop-blur-xl transition-colors dark:border-white/[0.08] dark:bg-[#090a0f]/80">
       <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3.5 sm:px-6 lg:px-8">
@@ -25,10 +26,6 @@ export function Header({ onRefresh, isRefreshing }: HeaderProps) {
             >
               <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
             </svg>
-            <span className="absolute -top-0.5 -right-0.5 flex h-2.5 w-2.5">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
-              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500" />
-            </span>
           </div>
 
           <div>
@@ -46,18 +43,26 @@ export function Header({ onRefresh, isRefreshing }: HeaderProps) {
           </div>
         </div>
 
-        {/* System Telemetry & Actions */}
+        {/* Architecture Badges & Actions */}
         <div className="flex items-center gap-2.5 sm:gap-3">
-          {/* Neon Postgres status badge */}
-          <div className="hidden md:inline-flex items-center gap-1.5 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-medium text-emerald-700 dark:border-emerald-500/25 dark:bg-emerald-500/15 dark:text-emerald-300">
-            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-            <span>Neon DB Active</span>
+          {hasError && (
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-rose-500/20 bg-rose-500/10 px-2.5 py-1 text-[11px] font-medium text-rose-600 dark:text-rose-400">
+              <span className="h-1.5 w-1.5 rounded-full bg-rose-500 animate-pulse" />
+              Sync Warning
+            </span>
+          )}
+
+          {/* Architecture badges (honest telemetry, no fake green dots) */}
+          <div className="hidden md:inline-flex items-center gap-1.5 rounded-full border border-zinc-200 bg-zinc-50 px-2.5 py-1 text-[11px] font-medium text-zinc-600 dark:border-zinc-800 dark:bg-zinc-800/50 dark:text-zinc-400">
+            <span>Neon DB / Prisma 7</span>
           </div>
 
-          {/* Gemini AI model badge */}
-          <div className="hidden lg:inline-flex items-center gap-1.5 rounded-full border border-indigo-500/20 bg-indigo-500/10 px-2.5 py-1 text-[11px] font-medium text-indigo-700 dark:border-indigo-500/25 dark:bg-indigo-500/15 dark:text-indigo-300">
-            <span className="h-1.5 w-1.5 rounded-full bg-indigo-500" />
+          <div className="hidden lg:inline-flex items-center gap-1.5 rounded-full border border-zinc-200 bg-zinc-50 px-2.5 py-1 text-[11px] font-medium text-zinc-600 dark:border-zinc-800 dark:bg-zinc-800/50 dark:text-zinc-400">
             <span>Gemini Multimodal</span>
+          </div>
+
+          <div className="hidden sm:inline-flex items-center gap-1.5 rounded-full border border-zinc-200 bg-zinc-50 px-2.5 py-1 text-[11px] font-medium text-zinc-600 dark:border-zinc-800 dark:bg-zinc-800/50 dark:text-zinc-400">
+            <span>n8n Pipeline</span>
           </div>
 
           {/* Refresh Action Button */}

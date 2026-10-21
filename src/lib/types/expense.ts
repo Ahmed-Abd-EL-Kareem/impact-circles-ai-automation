@@ -42,10 +42,12 @@ export interface ExtractedExpenseData {
 }
 
 export interface ValidatedExpenseResult {
+  idempotencyKey?: string | null;
   expenseDate: Date | null;
   vendor: string | null;
   invoiceNumber: string | null;
   description: string | null;
+  subtotalAmount: string | null;
   amount: string | null;
   currency: string | null;
   taxAmount: string | null;
@@ -57,10 +59,12 @@ export interface ValidatedExpenseResult {
 
 export interface ExpenseRecord {
   id: string;
+  idempotencyKey?: string | null;
   expenseDate: string | null;
   vendor: string | null;
   invoiceNumber: string | null;
   description: string | null;
+  subtotalAmount?: string | null;
   amount: string | null;
   currency: string | null;
   taxAmount: string | null;

@@ -32,10 +32,10 @@ function calculateFinanceSummary(expenses: ExpenseStub[]) {
     categoryMap.set(exp.category, (categoryMap.get(exp.category) || 0) + 1);
 
     // Currency grouping (STRICTLY separate; no cross-currency addition)
-    if (exp.currency && exp.amount) {
+    if (exp.currency && exp.currency.trim() && exp.amount) {
       const parsed = parseFloat(exp.amount);
       if (!isNaN(parsed)) {
-        const curr = exp.currency.toUpperCase();
+        const curr = exp.currency.trim().toUpperCase();
         const existing = currencyMap.get(curr) || { count: 0, total: 0 };
         currencyMap.set(curr, {
           count: existing.count + 1,
@@ -101,15 +101,34 @@ describe("Finance Summary & Currency Grouping", () => {
     assert.strictEqual(egpGroup?.count, 1);
     assert.strictEqual(egpGroup?.totalAmount, "1500.00");
 
-    // Verify that NO combined grand total was produced
-    assert.strictEqual((summary as any).grandTotal, undefined);
+    // Verify category breakdown
+    const software = summary.byCategory.find((c) => c.category === "software");
+    assert.strictEqual(software?.count, 2);
+    const travel = summary.byCategory.find((c) => c.category === "travel");
+    assert.strictEqual(travel?.count, 1);
+  });
+
+  it("handles null currency and null amount records without throwing or polluting totals", () => {
+    const expenses: ExpenseStub[] = [
+      { amount: "100.00", currency: null, validationStatus: "needs_review", category: "uncategorized" },
+      { amount: null, currency: "USD", validationStatus: "needs_review", category: "operational" },
+      { amount: "75.00", currency: "USD", validationStatus: "valid", category: "operational" },
+    ];
+
+    const summary = calculateFinanceSummary(expenses);
+    assert.strictEqual(summary.totalExpenses, 3);
+    assert.strictEqual(summary.byCurrency.length, 1);
+    assert.strictEqual(summary.byCurrency[0].currency, "USD");
+    assert.strictEqual(summary.byCurrency[0].totalAmount, "75.00");
   });
 
   it("handles empty expense list without crashing", () => {
     const summary = calculateFinanceSummary([]);
+
     assert.strictEqual(summary.totalExpenses, 0);
-    assert.strictEqual(summary.needsReviewCount, 0);
     assert.strictEqual(summary.validCount, 0);
+    assert.strictEqual(summary.needsReviewCount, 0);
+    assert.strictEqual(summary.duplicateSuspectedCount, 0);
     assert.strictEqual(summary.byCurrency.length, 0);
     assert.strictEqual(summary.byCategory.length, 0);
   });

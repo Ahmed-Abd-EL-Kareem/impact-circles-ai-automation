@@ -35,6 +35,7 @@ describe("Extraction Contract & Validation Logic", () => {
     assert.strictEqual(validated.vendor, "Acme Cloud Services");
     assert.strictEqual(validated.invoiceNumber, "INV-2026-001");
     assert.strictEqual(validated.amount, "250.00");
+    assert.strictEqual(validated.subtotalAmount, "225.00");
     assert.strictEqual(validated.currency, "USD");
     assert.strictEqual(validated.taxAmount, "25.00");
     assert.strictEqual(validated.category, "software");
@@ -86,10 +87,20 @@ describe("Extraction Contract & Validation Logic", () => {
     assert.strictEqual(nullDate.issue?.code, "MISSING_DATE");
   });
 
-  it("rejects invalid and negative amounts", () => {
+  it("rejects invalid, malformed, zero, and negative amounts", () => {
     const negative = validateDecimalAmount("-50.00", "amount");
-    assert.strictEqual(negative.amountStr, null);
+    assert.strictEqual(negative.amountStr, "-50.00");
     assert.strictEqual(negative.issue?.code, "NEGATIVE_AMOUNT");
+    assert.strictEqual(negative.issue?.severity, "error");
+
+    const zero = validateDecimalAmount("0.00", "amount");
+    assert.strictEqual(zero.amountStr, "0.00");
+    assert.strictEqual(zero.issue?.code, "ZERO_AMOUNT");
+    assert.strictEqual(zero.issue?.severity, "error");
+
+    const malformed = validateDecimalAmount("12.34.56", "amount");
+    assert.strictEqual(malformed.amountStr, null);
+    assert.strictEqual(malformed.issue?.code, "INVALID_AMOUNT");
 
     const notANumber = validateDecimalAmount("abc_invalid", "amount");
     assert.strictEqual(notANumber.amountStr, null);
@@ -98,6 +109,16 @@ describe("Extraction Contract & Validation Logic", () => {
     const missingAmount = validateDecimalAmount(null, "amount");
     assert.strictEqual(missingAmount.amountStr, null);
     assert.strictEqual(missingAmount.issue?.code, "MISSING_AMOUNT");
+  });
+
+  it("flags negative and malformed tax amounts", () => {
+    const negTax = validateDecimalAmount("-5.00", "taxAmount");
+    assert.strictEqual(negTax.issue?.code, "NEGATIVE_TAXAMOUNT");
+    assert.strictEqual(negTax.issue?.severity, "error");
+
+    const malformedTax = validateDecimalAmount("invalid_tax", "taxAmount");
+    assert.strictEqual(malformedTax.issue?.code, "INVALID_TAXAMOUNT");
+    assert.strictEqual(malformedTax.issue?.severity, "error");
   });
 
   it("normalizes common currency symbols to ISO codes and flags non-standard currencies", () => {
@@ -116,6 +137,7 @@ describe("Extraction Contract & Validation Logic", () => {
     const nonStandard = normalizeCurrency("GOLD_COINS");
     assert.strictEqual(nonStandard.currency, "GOLD_COINS");
     assert.strictEqual(nonStandard.issue?.code, "NON_STANDARD_CURRENCY");
+    assert.strictEqual(nonStandard.issue?.severity, "warning");
   });
 
   it("flags tax exceeding total amount as an error", () => {
@@ -140,23 +162,34 @@ describe("Extraction Contract & Validation Logic", () => {
     assert.strictEqual(taxIssue?.severity, "error");
   });
 
-  it("flags discrepancy when subtotal + tax does not equal total amount", () => {
-    const rawData = {
+  it("respects 0.02 tolerance for subtotal + tax = total reconciliation", () => {
+    // Within tolerance (diff = 0.01 <= 0.02)
+    const withinTolerance = {
       expenseDate: "2026-02-20",
       vendor: "Hardware Supplies",
       invoiceNumber: "HW-441",
       amount: "100.00",
-      taxAmount: "10.00",
-      subtotalAmount: "80.00", // 80 + 10 = 90 !== 100
+      taxAmount: "10.01",
+      subtotalAmount: "90.00",
       currency: "USD",
       category: "equipment",
       validationIssues: [],
     };
 
-    const validated = validateExtractedExpense(rawData, "receipt.pdf");
-    assert.strictEqual(validated.validationStatus, "needs_review");
+    const resPass = validateExtractedExpense(withinTolerance, "receipt.pdf");
+    assert.strictEqual(
+      resPass.validationIssues.some((i) => i.code === "ARITHMETIC_MISMATCH"),
+      false
+    );
 
-    const mathIssue = validated.validationIssues.find(
+    // Outside tolerance (diff = 0.05 > 0.02)
+    const outsideTolerance = {
+      ...withinTolerance,
+      subtotalAmount: "85.00", // 85 + 10.01 = 95.01 !== 100.00
+    };
+    const resFail = validateExtractedExpense(outsideTolerance, "receipt.pdf");
+    assert.strictEqual(resFail.validationStatus, "needs_review");
+    const mathIssue = resFail.validationIssues.find(
       (i) => i.code === "ARITHMETIC_MISMATCH"
     );
     assert.ok(mathIssue);
@@ -173,7 +206,7 @@ describe("Extraction Contract & Validation Logic", () => {
     assert.strictEqual(validated.validationIssues[0].code, "MALFORMED_EXTRACTION_DATA");
   });
 
-  it("validates categories and defaults unrecognized ones to uncategorized", () => {
+  it("validates categories and defaults unrecognized or missing ones to uncategorized", () => {
     const valid = validateCategory("equipment");
     assert.strictEqual(valid.category, "equipment");
     assert.strictEqual(valid.issue, undefined);
@@ -181,5 +214,9 @@ describe("Extraction Contract & Validation Logic", () => {
     const unknown = validateCategory("luxurious_gifts");
     assert.strictEqual(unknown.category, "uncategorized");
     assert.strictEqual(unknown.issue?.code, "UNCATEGORIZED_EXPENSE");
+
+    const missing = validateCategory(null);
+    assert.strictEqual(missing.category, "uncategorized");
+    assert.strictEqual(missing.issue?.code, "UNCATEGORIZED_EXPENSE");
   });
 });

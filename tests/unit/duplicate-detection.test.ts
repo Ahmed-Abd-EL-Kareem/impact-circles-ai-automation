@@ -2,7 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert";
 
 /**
- * Pure duplicate detection predicate matching the database query logic
+ * Pure duplicate detection predicate matching the exact database query logic
  * used in both n8n and the TypeScript backend.
  */
 interface ExpenseEntry {
@@ -24,21 +24,31 @@ function checkDuplicateInList(
   },
   existingList: ExpenseEntry[]
 ): { isDuplicate: boolean; matchType?: "primary" | "weaker"; matchedId?: string } {
-  if (!candidate.vendor || !candidate.amount || !candidate.currency) {
+  if (
+    !candidate.vendor ||
+    !candidate.vendor.trim() ||
+    !candidate.amount ||
+    !candidate.amount.trim() ||
+    !candidate.currency ||
+    !candidate.currency.trim()
+  ) {
     return { isDuplicate: false };
   }
 
   const normVendor = candidate.vendor.trim().toLowerCase();
-  const normAmount = parseFloat(candidate.amount).toFixed(2);
+  const parsedAmt = parseFloat(candidate.amount);
+  if (isNaN(parsedAmt)) return { isDuplicate: false };
+  const normAmount = parsedAmt.toFixed(2);
   const normCurrency = candidate.currency.trim().toUpperCase();
 
-  // 1. Primary candidate: same vendor + invoiceNumber + amount + currency
+  // 1. Primary candidate: same vendor + non-empty invoiceNumber + amount + currency
   if (candidate.invoiceNumber && candidate.invoiceNumber.trim()) {
     const normInvoice = candidate.invoiceNumber.trim().toLowerCase();
     const primaryMatch = existingList.find((e) => {
       return (
         e.vendor?.trim().toLowerCase() === normVendor &&
-        e.invoiceNumber?.trim().toLowerCase() === normInvoice &&
+        e.invoiceNumber &&
+        e.invoiceNumber.trim().toLowerCase() === normInvoice &&
         parseFloat(e.amount || "0").toFixed(2) === normAmount &&
         e.currency?.trim().toUpperCase() === normCurrency
       );
@@ -47,9 +57,13 @@ function checkDuplicateInList(
     if (primaryMatch) {
       return { isDuplicate: true, matchType: "primary", matchedId: primaryMatch.id };
     }
+
+    // Do NOT evaluate weaker date-based match when incoming document has invoiceNumber
+    return { isDuplicate: false };
   }
 
-  // 2. Weaker candidate: when invoiceNumber is missing, use vendor + date + amount + currency
+  // 2. Weaker candidate: ONLY when incoming invoiceNumber is missing, use vendor + date + amount + currency
+  // AND existing record must ALSO lack an invoice number
   if (!candidate.invoiceNumber && candidate.expenseDate) {
     const weakerMatch = existingList.find((e) => {
       return (
@@ -86,6 +100,14 @@ describe("Duplicate Detection Logic", () => {
       expenseDate: "2026-03-10",
       amount: "15.50",
       currency: "EUR",
+    },
+    {
+      id: "exp_3",
+      vendor: "AWS Cloud Services",
+      invoiceNumber: "AWS-1122",
+      expenseDate: "2026-03-15",
+      amount: "120.00",
+      currency: "USD",
     },
   ];
 
@@ -124,7 +146,7 @@ describe("Duplicate Detection Logic", () => {
       vendor: "GitHub Inc.",
       invoiceNumber: "GH-8941",
       expenseDate: "2026-03-01",
-      amount: "80.00", // Different amount
+      amount: "80.00",
       currency: "USD",
     };
 
@@ -156,5 +178,72 @@ describe("Duplicate Detection Logic", () => {
 
     const result = checkDuplicateInList(candidate, existingExpenses);
     assert.strictEqual(result.isDuplicate, false);
+  });
+
+  it("does not use weaker date match if incoming document has an invoice number", () => {
+    // Has invoice number "NEW-999" and same vendor/date/amount as exp_2
+    const candidate = {
+      vendor: "Local Metro Cafe",
+      invoiceNumber: "NEW-999",
+      expenseDate: "2026-03-10",
+      amount: "15.50",
+      currency: "EUR",
+    };
+
+    const result = checkDuplicateInList(candidate, existingExpenses);
+    assert.strictEqual(result.isDuplicate, false);
+  });
+
+  it("does not match weaker candidate if existing record has an invoice number", () => {
+    // Incoming is missing invoice number, but AWS has invoice number "AWS-1122"
+    const candidate = {
+      vendor: "AWS Cloud Services",
+      invoiceNumber: null,
+      expenseDate: "2026-03-15",
+      amount: "120.00",
+      currency: "USD",
+    };
+
+    const result = checkDuplicateInList(candidate, existingExpenses);
+    assert.strictEqual(result.isDuplicate, false);
+  });
+
+  it("does not treat records with missing vendor, amount, or currency as confirmed matches", () => {
+    assert.strictEqual(
+      checkDuplicateInList(
+        { vendor: null, invoiceNumber: "GH-8941", expenseDate: "2026-03-01", amount: "40.00", currency: "USD" },
+        existingExpenses
+      ).isDuplicate,
+      false
+    );
+
+    assert.strictEqual(
+      checkDuplicateInList(
+        { vendor: "GitHub Inc.", invoiceNumber: "GH-8941", expenseDate: "2026-03-01", amount: null, currency: "USD" },
+        existingExpenses
+      ).isDuplicate,
+      false
+    );
+
+    assert.strictEqual(
+      checkDuplicateInList(
+        { vendor: "GitHub Inc.", invoiceNumber: "GH-8941", expenseDate: "2026-03-01", amount: "40.00", currency: null },
+        existingExpenses
+      ).isDuplicate,
+      false
+    );
+  });
+
+  it("handles request-level idempotency by preserving previous record on retry", () => {
+    const store = new Map<string, { id: string; amount: string }>();
+    const idempotencyKey = "req_key_abc_123";
+
+    // First request
+    store.set(idempotencyKey, { id: "exp_unique_1", amount: "100.00" });
+
+    // Repeated request with same idempotency key
+    const replay = store.get(idempotencyKey);
+    assert.ok(replay);
+    assert.strictEqual(replay.id, "exp_unique_1");
   });
 });

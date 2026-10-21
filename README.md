@@ -1,6 +1,6 @@
 # Impact Circles — AI Automation: Financial Document Assistant (Phase 2)
 
-A production-grade vertical slice for intelligent financial document ingestion, structured multimodal extraction, duplicate detection, and persistent expense management built with **Next.js App Router**, **Neon PostgreSQL**, **Prisma ORM**, **Google Gemini API**, and **n8n workflow orchestration**.
+A production-grade vertical slice for intelligent financial document ingestion, structured multimodal extraction, duplicate detection, request idempotency, and persistent expense management built with **Next.js App Router**, **Neon PostgreSQL**, **Prisma ORM**, **Google Gemini API**, and **n8n workflow orchestration**.
 
 ---
 
@@ -12,20 +12,20 @@ A production-grade vertical slice for intelligent financial document ingestion, 
       ▼
 [Next.js Server API: POST /api/invoices]
       │  1. Validates magic bytes (%PDF, PNG, JPEG) and 10MB bounds
-      │  2. Dispatches payload + HMAC/shared secret header to n8n
+      │  2. Dispatches payload + shared secret header (`x-webhook-secret`) to n8n
       ▼
 [n8n Automation Pipeline (Port 5678)]
       ├─ 1. Webhook Trigger (`POST /webhook/impact-circles-ai-automation`)
       ├─ 2. Validate Request & Shared Secret (`x-webhook-secret`)
-      ├─ 3. Multimodal Extraction via Google Gemini (`gemini-flash-latest`)
-      ├─ 4. Server-side Extraction Schema & Arithmetic Sanity Validation
-      ├─ 5. Duplicate Detection Query against Neon PostgreSQL
-      ├─ 6. Single-Ownership Persistence (INSERT INTO "Expense")
+      ├─ 3. Multimodal Extraction via Google Gemini (`gemini-flash-latest` / `gemini-3.1-flash-lite`)
+      ├─ 4. Server-side Extraction Schema & Arithmetic Sanity Validation ($0.02 tolerance)
+      ├─ 5. Duplicate Detection Query against Neon PostgreSQL (Parameterized $1..$N SQL)
+      ├─ 6. Single-Ownership Persistence with Idempotency (INSERT ... ON CONFLICT DO UPDATE)
       └─ 7. Respond to Webhook with 201 Created + Persisted Record
       │
       ▼
 [Next.js Client UI]
-      └─ Displays updated expense table, validation badges & issue inspector modal
+      └─ Displays updated expense table, validation badges, subtotal, and issue inspector modal
 ```
 
 ---
@@ -102,15 +102,17 @@ npx prisma migrate deploy
 
 The database schema defines the `Expense` model with the following fields and indexes:
 - `id` (String primary key)
+- `idempotencyKey` (String unique nullable — enforces request-level idempotency)
 - `expenseDate` (DateTime nullable)
 - `vendor` (String nullable)
 - `invoiceNumber` (String nullable)
 - `description` (String nullable)
-- `amount` (Decimal 12,2 nullable)
+- `subtotalAmount` (Decimal 12,2 nullable — stores pre-tax amount)
+- `amount` (Decimal 12,2 nullable — stores total amount)
 - `currency` (String nullable)
 - `taxAmount` (Decimal 12,2 nullable)
-- `category` (String: personnel, travel, equipment, software, events, operational, uncategorized)
-- `validationStatus` (String: valid, needs_review, duplicate_suspected, processing_failed)
+- `category` (String: `personnel`, `travel`, `equipment`, `software`, `events`, `operational`, `uncategorized`)
+- `validationStatus` (String: `valid`, `needs_review`, `duplicate_suspected`, `processing_failed`)
 - `validationIssues` (JSONB structured list of detected anomalies)
 - `sourceFileName` (String)
 - `createdAt` & `updatedAt` (DateTime)
@@ -135,10 +137,13 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 Open a new PowerShell terminal and run:
 
 ```powershell
-# Set the environment variables in the terminal session
-$env:N8N_WEBHOOK_SECRET="your-secure-random-secret-key"
-$env:GEMINI_API_KEY="YOUR_GEMINI_API_KEY"
-$env:GEMINI_MODEL="gemini-flash-latest"
+# Load .env into the PowerShell session
+Get-Content .env | Where-Object { $_ -match '^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$' } | ForEach-Object {
+  [System.Environment]::SetEnvironmentVariable($matches[1], $matches[2].Trim('"', "'"))
+}
+
+# Allow Code nodes to read environment variables (for shared secret verification)
+$env:N8N_BLOCK_ENV_ACCESS_IN_NODE="false"
 
 # Start n8n
 npx n8n
@@ -151,7 +156,7 @@ n8n will start and be accessible at [http://localhost:5678](http://localhost:567
 ## 7. How to Import and Configure the Finance Workflow in n8n
 
 1. Open your browser and navigate to `http://localhost:5678`.
-2. In the left navigation, click **Workflows** → **Add Workflow** (or **Import from File**).
+2. In the left navigation, click **Workflows** → **Import from File**.
 3. Select the file:
    `n8n/workflows/finance-processing.json`
 4. Set up the **Neon Postgres** credentials in n8n:
@@ -163,36 +168,55 @@ n8n will start and be accessible at [http://localhost:5678](http://localhost:567
    - Password: Your Neon database password.
    - Port: `5432`
    - SSL: `Require` / `Verify-Full`
-5. Ensure the workflow is **Activated** (toggle switch in the top right to **Active**).
+5. Connect both Postgres nodes in the workflow (`Check Duplicate in Neon Postgres` and `Persist Expense into Neon Postgres`) to your credential.
+6. Ensure the workflow is **Activated** (toggle switch in the top right to **Active**).
 
 ---
 
-## 8. Testing
+## 8. Testing & Quality Verification
 
 ### Run Unit Tests
-A focused test suite covers magic-byte detection, extraction schema rules, arithmetic bounds, duplicate detection, and summary grouping:
+A comprehensive test suite of 37 unit tests across 5 suites:
 
 ```powershell
 npm test
 ```
 
+Covers:
+- Binary magic-byte inspection and spoofed extension rejection.
+- Structured extraction schema validation, arithmetic reconciliation (\$0.02 tolerance), and honest nulls.
+- Duplicate detection: primary candidate matching and secondary missing-invoice-number matching.
+- Multi-currency isolation: zero cross-currency pollution.
+- n8n workflow client: authentication, timeouts, and error propagation.
+
 ### Run End-to-End Integration Test
 Runs a live end-to-end test against real Gemini and Neon PostgreSQL:
 
 ```powershell
-node --env-file=.env scripts/test-integration.ts
+npm run test:integration
 ```
 
-This script:
+This automated verification:
 1. Verifies connectivity to Neon PostgreSQL.
-2. Reads the sample invoice fixture `test-fixtures/fictional-invoice.pdf`.
+2. Ingests `test-fixtures/fictional-invoice.pdf`.
 3. Calls Google Gemini to extract structured invoice data.
-4. Validates the schema and arithmetic bounds.
-5. Persists the expense to Neon PostgreSQL.
-6. Submits a duplicate fixture to verify that duplicate detection flags `duplicate_suspected`.
-7. Verifies currency grouping (strictly separated; no cross-currency summing).
-8. Probes the local n8n webhook.
-9. Automatically cleans up test records from the database.
+4. Asserts request-level idempotency replay (identical record returned, zero count increment).
+5. Submits duplicate fixture and asserts `duplicate_suspected` flag and candidate ID capture.
+6. Verifies strict currency grouping (no cross-currency addition).
+7. Probes the live n8n workflow webhook, verifying HTTP 201 response and single persistence ownership.
+8. Cleans up all test-created records from Neon PostgreSQL automatically.
+
+### Code Quality Verification
+```powershell
+# Type check
+npx tsc --noEmit
+
+# Lint check
+npm run lint
+
+# Turbopack build
+npm run build
+```
 
 ---
 
@@ -208,7 +232,7 @@ This script:
    - Observe that the record is persisted and marked as `duplicate_suspected`.
 4. **Validation Inspector**:
    - Click the **Inspect** button next to any row.
-   - A modal drawer displays the raw fields, missing values, and specific anomaly codes.
+   - The drawer displays pre-tax subtotal, total, tax amount, idempotency key, and specific anomaly codes.
 5. **Filters & Pagination**:
    - Filter by status (`valid`, `needs_review`, `duplicate_suspected`).
    - Filter by category (`software`, `operational`, etc.).
@@ -217,8 +241,10 @@ This script:
 
 ---
 
-## 10. Known Limitations & Notes
+## 10. Architectural Invariants
 
-- **Offline n8n Graceful Handling**: If n8n is offline when an upload is attempted in the UI, the API returns a clear HTTP 503 explaining that the local n8n instance is offline, rather than failing silently or presenting a false success.
-- **Model Choice**: Google Gemini deprecated `gemini-2.5-flash` for new users. The implementation uses `gemini-flash-latest` (or `gemini-3.1-flash-lite`), which supports multimodal PDF and image documents with structured JSON schema output.
-- **Currency Conversion**: As specified in the Phase 2 requirements, cross-currency addition is strictly forbidden without real-time exchange rates. Volumes are displayed separately per currency code.
+- **Single Persistence Ownership**: n8n is the single orchestration and persistence owner in production; the Next.js API delegates via signed webhook and receives the persisted record.
+- **Strict SQL Parameterization**: All SQL queries use bound parameters (`$1..$N`) via `options.queryReplacement`. String interpolation of user input is strictly prohibited.
+- **Request Idempotency**: Atomic `ON CONFLICT ("idempotencyKey")` guarantees that retries return the original record without creating duplicate entries.
+- **Multi-Currency Invariant**: Cross-currency addition is strictly forbidden without real-time exchange rates. Volumes are displayed separately per currency code.
+- **Honest Null Policy**: Missing or unreadable fields remain `null` with status `needs_review`. The AI is never permitted to hallucinate invoice numbers, dates, or amounts.

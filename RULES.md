@@ -12,6 +12,7 @@ This document establishes the mandatory architectural rules, engineering standar
 - **Component Separation**:
   - Default to **React Server Components (RSC)** where interactive state or browser APIs are not needed.
   - Mark client-interactive components explicitly with `'use client'` at the very top (e.g., upload zones, modals, dynamic tables).
+  - Do not trigger synchronous `setState` in `useEffect` bodies (comply with React 19/Next 16 linter).
 - **Agent File Integrity**:
   - The Next.js development server automatically generates and expects the `<!-- BEGIN:nextjs-agent-rules -->` block in `AGENTS.md`. Never delete or tamper with that block.
 
@@ -22,6 +23,8 @@ This document establishes the mandatory architectural rules, engineering standar
   - Never instantiate duplicate `PrismaClient` instances. Always import the global singleton from `@/lib/db`.
 - **Schema & Migrations**:
   - Monetary values must use `Decimal(12, 2)`. Never store currency amounts as floating-point numbers.
+  - Store pre-tax amounts in `subtotalAmount Decimal(12, 2)?` for financial reconciliation.
+  - Enforce request-level idempotency with `idempotencyKey String? @unique`.
   - Complex validation outputs and anomaly lists must be stored in the structured `validationIssues` JSONB column.
   - All schema modifications must be applied via `npx prisma migrate dev` or `npx prisma migrate deploy`. Never edit the Neon database directly.
 
@@ -30,9 +33,11 @@ This document establishes the mandatory architectural rules, engineering standar
   - In the primary production pipeline, n8n owns execution and inserts the verified expense into Neon PostgreSQL.
   - The Next.js API acts as an authenticated entrypoint and validates incoming file payloads before dispatching to n8n.
   - Fallback execution in Next.js is strictly for offline development resilience and must adhere to the exact same validation and schema rules.
-- **Workflow Security**:
-  - All calls to the n8n webhook must include the shared secret header `x-webhook-secret`.
-  - Any webhook request lacking or failing this header must be rejected immediately with HTTP 401 Unauthorized.
+- **Workflow Security & SQL Parameterization**:
+  - All database queries in n8n Postgres nodes MUST use bound parameters (`$1..$N`) via `options.queryReplacement`. NEVER interpolate variables directly into SQL strings.
+  - Webhook requests must validate the `x-webhook-secret` header against `process.env.N8N_WEBHOOK_SECRET` before executing AI or database nodes.
+  - Ensure duplicate check queries return a deterministic single-row item (`SELECT (SELECT ...) AS "matchedCandidate"`) so zero-match cases do not stall workflow execution.
+  - Persistence queries must handle idempotency conflicts gracefully via `ON CONFLICT ("idempotencyKey") DO UPDATE SET "updatedAt" = "Expense"."updatedAt" RETURNING *`.
 
 ---
 
@@ -43,20 +48,24 @@ This document establishes the mandatory architectural rules, engineering standar
   - You must NEVER sum financial figures across differing currency codes without explicit, dated exchange rates.
   - All financial aggregations (in APIs, UI summary cards, and exports) must group volumes separately by ISO 4217 currency code (e.g., `USD: $12,450.00`, `EUR: €4,200.00`, `EGP: 35,000.00 EGP`).
 - **Currency Normalization**:
-  - Symbols must be normalized to standard ISO 4217 uppercase codes (`$` $\to$ `USD`, `€` $\to$ `EUR`, `£` $\to$ `GBP`, `₹` $\to$ `INR`).
+  - Symbols must be normalized to standard ISO 4217 uppercase codes (`$` $\to$ `USD`, `€` $\to$ `EUR`, `£` $\to$ `GBP`, `LE`/`EGP` $\to$ `EGP`, `AED` $\to$ `AED`, `SAR` $\to$ `SAR`).
   - Unrecognized currency codes must be flagged with an anomaly warning.
 
 ### 2.2 Mathematical & Arithmetic Reconciliation
 - For every extracted invoice:
-  - If `subtotal` and `taxAmount` are present, `subtotal + taxAmount` must equal `amount` (total) within a \$0.02 tolerance (to account for rounding). Discrepancies must be flagged as `arithmetic_mismatch`.
-  - `taxAmount` must never exceed `amount`. Violations must be flagged as `tax_exceeds_total`.
-  - Extracted amounts must be strictly positive ($> 0$). Negative or zero values must be marked as invalid.
+  - If `subtotalAmount` and `taxAmount` are present, `subtotalAmount + taxAmount` must equal `amount` (total) within a \$0.02 tolerance (to account for rounding). Discrepancies must be flagged as `ARITHMETIC_MISMATCH`.
+  - `taxAmount` must never exceed `amount`. Violations must be flagged as `TAX_EXCEEDS_TOTAL`.
+  - Extracted amounts must be strictly positive ($> 0$). Negative or zero values must be marked as invalid (`ZERO_AMOUNT`, `NEGATIVE_AMOUNT`).
 
 ### 2.3 Duplicate Detection Invariants
 - Every ingested document must be checked against existing records before finalizing status:
-  1. **Primary Match**: Same `vendor` + `invoiceNumber` + `amount` + `currency` $\to$ immediate flag as `duplicate_suspected`.
-  2. **Secondary Match (Missing Invoice Number)**: Same `vendor` + `expenseDate` + `amount` + `currency` $\to$ flag as `duplicate_suspected`.
+  1. **Primary Match**: Case-insensitive `vendor` + case-insensitive non-empty `invoiceNumber` + exact `amount` + `currency` $\to$ flag as `duplicate_suspected`.
+  2. **Secondary Match (Missing Invoice Number Only)**: Used STRICTLY when the incoming document lacks an invoice number. Matches same `vendor` + same calendar day `expenseDate` + `amount` + `currency`, AND requires that the existing record ALSO lacks an invoice number.
+  - Never use the weaker date match when the incoming document has an invoice number.
 - Flagged duplicates must still be persisted to ensure an immutable audit log, with their `validationStatus` set to `duplicate_suspected` and candidate IDs recorded in `validationIssues`.
+
+### 2.4 Request Idempotency
+- Network retries with the same `idempotencyKey` must return the previously persisted record without creating duplicate entries in the database.
 
 ---
 
@@ -83,17 +92,19 @@ This document establishes the mandatory architectural rules, engineering standar
 
 ---
 
-## 4. Code Quality & Development Standards
+## 4. Code Quality & Verification Standards
 
 ### 4.1 TypeScript & Code Style
-- `strict: true` is enforced in `tsconfig.json`. Do not use `any` unless strictly necessary for untyped third-party boundaries, and even then, wrap with runtime validation.
+- `strict: true` is enforced in `tsconfig.json`. Do not use `any` unless strictly necessary for untyped third-party boundaries.
 - All domain interfaces must reside in `src/lib/types/` (e.g., `src/lib/types/expense.ts`).
 
-### 4.2 Testing Standards
-- All core business logic (file validation, extraction schema checking, duplicate detection, currency grouping, workflow communication) must have unit test coverage.
-- Tests use Node's native test runner (`tests/unit/*.test.ts`). Run via `npm test`.
-- All tests must pass cleanly before any code is committed or merged.
+### 4.2 Quality Gates
+- **Type Checking**: `npx tsc --noEmit` must pass with 0 errors.
+- **Linting**: `npm run lint` must pass with 0 errors and 0 warnings.
+- **Unit Tests**: `npm test` must run all 37 tests across 5 test suites with 100% pass rate.
+- **Turbopack Build**: `npm run build` must compile cleanly without errors.
+- **Integration Test**: `npm run test:integration` verifies live database, AI extraction, idempotency replay, and duplicate detection.
 
 ### 4.3 Git Commit Discipline
-- Make atomic, descriptive commits following conventional commit syntax (e.g., `feat:`, `fix:`, `docs:`, `test:`, `refactor:`).
-- Verify build (`npm run build`) and test suite (`npm test`) pass with zero errors before pushing.
+- Make atomic, descriptive commits following conventional commit syntax (`feat:`, `fix:`, `docs:`, `test:`, `refactor:`).
+- Verify build and tests pass before committing or pushing.

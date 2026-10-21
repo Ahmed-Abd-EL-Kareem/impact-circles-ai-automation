@@ -1,4 +1,4 @@
-import type { ExpenseRecord } from "../types/expense.ts";
+import type { ExpenseRecord, ValidationIssue } from "../types/expense.ts";
 
 export interface ProcessDocumentParams {
   buffer: Buffer;
@@ -63,38 +63,60 @@ export async function dispatchToN8nWorkflow(
 
     clearTimeout(timeoutId);
 
+    const responseText = await response.text();
+
     if (!response.ok) {
-      const errorBody = await response.text();
-      let parsedError: string;
+      let parsedError = responseText;
       try {
-        const jsonErr = JSON.parse(errorBody);
-        parsedError = jsonErr.message || jsonErr.error || errorBody;
+        const jsonErr = JSON.parse(responseText);
+        parsedError = jsonErr.error || jsonErr.message || responseText;
       } catch {
-        parsedError = errorBody.slice(0, 300);
+        parsedError = responseText.slice(0, 300);
       }
 
       if (response.status === 401 || response.status === 403) {
         return {
           success: false,
-          error:
-            "Authentication failed: n8n webhook rejected the shared secret.",
+          error: "Authentication failed: n8n webhook rejected the shared secret.",
           statusCode: 401,
         };
       }
 
       return {
         success: false,
-        error: `n8n workflow failed with status ${response.status}: ${parsedError}`,
-        statusCode: response.status >= 500 ? 502 : 400,
+        error: `n8n workflow failed with status ${response.status}: ${parsedError || "Unknown error"}`,
+        statusCode: response.status >= 500 ? 502 : response.status,
       };
     }
 
-    const data = await response.json();
+    if (!responseText || !responseText.trim()) {
+      return {
+        success: false,
+        error: "n8n workflow returned an empty response. No expense record was persisted.",
+        statusCode: 502,
+      };
+    }
 
-    if (!data || !data.success || !data.expense) {
+    let data: {
+      success?: boolean;
+      error?: string;
+      expense?: Record<string, unknown>;
+    };
+    try {
+      data = JSON.parse(responseText);
+    } catch {
+      return {
+        success: false,
+        error: `n8n workflow returned invalid non-JSON output: ${responseText.slice(0, 200)}`,
+        statusCode: 502,
+      };
+    }
+
+    if (!data || !data.success || !data.expense || !data.expense.id) {
       return {
         success: false,
         error:
+          data?.error ||
           "n8n workflow did not return a valid persisted expense record.",
         statusCode: 502,
       };
@@ -102,29 +124,51 @@ export async function dispatchToN8nWorkflow(
 
     // Format fields
     const expense = data.expense;
+    let issues: ValidationIssue[] = [];
+    if (Array.isArray(expense.validationIssues)) {
+      issues = expense.validationIssues as ValidationIssue[];
+    } else if (typeof expense.validationIssues === "string") {
+      try {
+        issues = JSON.parse(expense.validationIssues);
+      } catch {
+        issues = [];
+      }
+    }
+
     return {
       success: true,
       expense: {
         id: String(expense.id),
+        idempotencyKey: expense.idempotencyKey ? String(expense.idempotencyKey) : null,
         expenseDate: expense.expenseDate
-          ? new Date(expense.expenseDate).toISOString().slice(0, 10)
+          ? new Date(expense.expenseDate as string).toISOString().slice(0, 10)
           : null,
-        vendor: expense.vendor || null,
-        invoiceNumber: expense.invoiceNumber || null,
-        description: expense.description || null,
-        amount: expense.amount !== null && expense.amount !== undefined ? String(expense.amount) : null,
-        currency: expense.currency || null,
-        taxAmount: expense.taxAmount !== null && expense.taxAmount !== undefined ? String(expense.taxAmount) : null,
-        category: expense.category || "uncategorized",
-        validationStatus: expense.validationStatus || "needs_review",
-        validationIssues: Array.isArray(expense.validationIssues)
-          ? expense.validationIssues
-          : typeof expense.validationIssues === "string"
-          ? JSON.parse(expense.validationIssues)
-          : [],
-        sourceFileName: expense.sourceFileName || params.fileName,
-        createdAt: expense.createdAt ? new Date(expense.createdAt).toISOString() : new Date().toISOString(),
-        updatedAt: expense.updatedAt ? new Date(expense.updatedAt).toISOString() : new Date().toISOString(),
+        vendor: expense.vendor ? String(expense.vendor) : null,
+        invoiceNumber: expense.invoiceNumber ? String(expense.invoiceNumber) : null,
+        description: expense.description ? String(expense.description) : null,
+        subtotalAmount:
+          expense.subtotalAmount !== null && expense.subtotalAmount !== undefined
+            ? String(expense.subtotalAmount)
+            : null,
+        amount:
+          expense.amount !== null && expense.amount !== undefined
+            ? String(expense.amount)
+            : null,
+        currency: expense.currency ? String(expense.currency) : null,
+        taxAmount:
+          expense.taxAmount !== null && expense.taxAmount !== undefined
+            ? String(expense.taxAmount)
+            : null,
+        category: (expense.category as ExpenseRecord["category"]) || "uncategorized",
+        validationStatus: (expense.validationStatus as ExpenseRecord["validationStatus"]) || "needs_review",
+        validationIssues: issues,
+        sourceFileName: expense.sourceFileName ? String(expense.sourceFileName) : params.fileName,
+        createdAt: expense.createdAt
+          ? new Date(expense.createdAt as string).toISOString()
+          : new Date().toISOString(),
+        updatedAt: expense.updatedAt
+          ? new Date(expense.updatedAt as string).toISOString()
+          : new Date().toISOString(),
       },
     };
   } catch (err: unknown) {

@@ -18,30 +18,52 @@ export interface DuplicateCheckResult {
 
 /**
  * Checks database for duplicate candidates based on:
- * 1. Primary: Same vendor + invoiceNumber + amount + currency.
- * 2. Weaker (when invoiceNumber is missing): Same vendor + expenseDate + amount + currency.
+ * 1. Primary: Same vendor (case-insensitive) + non-empty invoiceNumber (case-insensitive) + amount + currency.
+ * 2. Secondary (ONLY when incoming invoiceNumber is missing): Same vendor (case-insensitive) + same calendar date + amount + currency + existing record also lacks invoiceNumber.
+ *
+ * Guaranteed invariants:
+ * - If incoming document has an invoice number, weaker date-based match is NEVER evaluated.
+ * - Records with missing vendor, amount, or currency are never treated as matches.
+ * - Database errors are not masked as false negatives.
  */
 export async function checkForDuplicateExpense(
   params: DuplicateCheckParams
 ): Promise<DuplicateCheckResult> {
   const { vendor, invoiceNumber, expenseDate, amount, currency } = params;
 
-  if (!vendor || !amount || !currency) {
+  if (
+    !vendor ||
+    !vendor.trim() ||
+    !amount ||
+    !amount.trim() ||
+    !currency ||
+    !currency.trim()
+  ) {
     return { isDuplicate: false };
   }
 
-  const decimalAmount = new Prisma.Decimal(amount);
+  let decimalAmount: Prisma.Decimal;
+  try {
+    decimalAmount = new Prisma.Decimal(amount.trim());
+  } catch {
+    return { isDuplicate: false };
+  }
+
+  const trimmedVendor = vendor.trim();
+  const trimmedCurrency = currency.trim().toUpperCase();
+  const trimmedInvoice = invoiceNumber ? invoiceNumber.trim() : "";
 
   // 1. Primary candidate check (vendor + invoiceNumber + amount + currency)
-  if (invoiceNumber && invoiceNumber.trim()) {
+  if (trimmedInvoice.length > 0) {
     const primaryMatch = await prisma.expense.findFirst({
       where: {
-        vendor: { equals: vendor.trim(), mode: "insensitive" },
-        invoiceNumber: { equals: invoiceNumber.trim(), mode: "insensitive" },
+        vendor: { equals: trimmedVendor, mode: "insensitive" },
+        invoiceNumber: { equals: trimmedInvoice, mode: "insensitive" },
         amount: decimalAmount,
-        currency: { equals: currency.trim(), mode: "insensitive" },
+        currency: { equals: trimmedCurrency, mode: "insensitive" },
       },
       select: { id: true, invoiceNumber: true, vendor: true },
+      orderBy: { createdAt: "desc" },
     });
 
     if (primaryMatch) {
@@ -49,14 +71,16 @@ export async function checkForDuplicateExpense(
         isDuplicate: true,
         matchType: "primary",
         existingExpenseId: primaryMatch.id,
-        reason: `Matches existing expense #${primaryMatch.id} with same vendor (${vendor}), invoice #${invoiceNumber}, amount (${amount}), and currency (${currency}).`,
+        reason: `Matches existing expense #${primaryMatch.id} with same vendor (${trimmedVendor}), invoice #${trimmedInvoice}, amount (${amount}), and currency (${trimmedCurrency}).`,
       };
     }
+
+    // Do NOT fall back to date-based match when incoming invoice number exists
+    return { isDuplicate: false };
   }
 
-  // 2. Weaker candidate check (when invoiceNumber is missing: vendor + expenseDate + amount + currency)
-  if (!invoiceNumber && expenseDate) {
-    // Check expenses on the same calendar day
+  // 2. Secondary candidate check (only when incoming invoiceNumber is missing/empty)
+  if (expenseDate) {
     const startOfDay = new Date(expenseDate);
     startOfDay.setUTCHours(0, 0, 0, 0);
     const endOfDay = new Date(expenseDate);
@@ -64,23 +88,26 @@ export async function checkForDuplicateExpense(
 
     const weakerMatch = await prisma.expense.findFirst({
       where: {
-        vendor: { equals: vendor.trim(), mode: "insensitive" },
+        vendor: { equals: trimmedVendor, mode: "insensitive" },
+        invoiceNumber: null, // Existing record must ALSO lack an invoice number
         amount: decimalAmount,
-        currency: { equals: currency.trim(), mode: "insensitive" },
+        currency: { equals: trimmedCurrency, mode: "insensitive" },
         expenseDate: {
           gte: startOfDay,
           lte: endOfDay,
         },
       },
       select: { id: true, expenseDate: true, vendor: true },
+      orderBy: { createdAt: "desc" },
     });
 
     if (weakerMatch) {
+      const dateStr = expenseDate.toISOString().slice(0, 10);
       return {
         isDuplicate: true,
         matchType: "weaker",
         existingExpenseId: weakerMatch.id,
-        reason: `Matches existing expense #${weakerMatch.id} with same vendor (${vendor}), date (${expenseDate.toISOString().slice(0, 10)}), amount (${amount}), and currency (${currency}).`,
+        reason: `Matches existing unnumbered expense #${weakerMatch.id} with same vendor (${trimmedVendor}), calendar date (${dateStr}), amount (${amount}), and currency (${trimmedCurrency}).`,
       };
     }
   }

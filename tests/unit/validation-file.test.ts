@@ -48,6 +48,16 @@ describe("File Validation & Magic Bytes", () => {
     }
   });
 
+  it("rejects unsupported format (e.g., GIF, ZIP, EXE)", () => {
+    const gifBuffer = Buffer.from("GIF89a\x01\x00\x01\x00");
+    const result = validateFileBuffer(gifBuffer, "animation.gif");
+
+    assert.strictEqual(result.success, false);
+    if (!result.success) {
+      assert.match(result.error, /Unsupported file format/);
+    }
+  });
+
   it("rejects empty buffers", () => {
     const emptyBuffer = Buffer.alloc(0);
     const result = validateFileBuffer(emptyBuffer, "empty.pdf");
@@ -58,15 +68,34 @@ describe("File Validation & Magic Bytes", () => {
     }
   });
 
-  it("rejects files exceeding the 10 MB size limit", () => {
-    // Construct buffer slightly larger than 10MB with PDF magic bytes
-    const largeBuffer = Buffer.alloc(MAX_FILE_SIZE_BYTES + 1024);
-    largeBuffer.write("%PDF-", 0);
+  it("accepts file at exact 10 MB limit and rejects file oversized by 1 byte", () => {
+    // Exact 10 MB buffer with PDF magic header
+    const exactBuffer = Buffer.alloc(MAX_FILE_SIZE_BYTES);
+    exactBuffer.write("%PDF-", 0);
+    const exactResult = validateFileBuffer(exactBuffer, "exact10mb.pdf");
+    assert.strictEqual(exactResult.success, true);
 
-    const result = validateFileBuffer(largeBuffer, "huge.pdf");
-    assert.strictEqual(result.success, false);
-    if (!result.success) {
-      assert.match(result.error, /File size exceeds the 10 MB limit/);
+    // 10 MB + 1 byte
+    const overBuffer = Buffer.alloc(MAX_FILE_SIZE_BYTES + 1);
+    overBuffer.write("%PDF-", 0);
+    const overResult = validateFileBuffer(overBuffer, "over10mb.pdf");
+    assert.strictEqual(overResult.success, false);
+    if (!overResult.success) {
+      assert.match(overResult.error, /File size exceeds the 10 MB limit/);
+    }
+  });
+
+  it("sanitizes file names to prevent path traversal or shell exploits", () => {
+    const pdfBuffer = Buffer.from("%PDF-1.4\nTest dummy invoice");
+    const result = validateFileBuffer(
+      pdfBuffer,
+      "../../etc/passwd;rm -rf 'special\"chars.pdf"
+    );
+
+    assert.strictEqual(result.success, true);
+    if (result.success) {
+      assert.doesNotMatch(result.file.fileName, /\.\.\//);
+      assert.doesNotMatch(result.file.fileName, /[;'"\\]/);
     }
   });
 });

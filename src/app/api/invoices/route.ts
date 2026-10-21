@@ -3,6 +3,7 @@ import { validateFileBuffer } from "@/lib/validation/file";
 import { dispatchToN8nWorkflow } from "@/lib/services/workflow-client";
 import { prisma } from "@/lib/db";
 import { ExpenseCategory, ValidationStatus } from "@/lib/types/expense";
+import { Prisma } from "@prisma/client";
 
 /**
  * POST /api/invoices
@@ -52,11 +53,19 @@ export async function POST(req: NextRequest) {
 
     const validatedFile = validationResult.file;
 
-    // Dispatch to n8n automation workflow
+    // Optional request-level idempotency key
+    const idempotencyKey =
+      req.headers.get("x-idempotency-key") ||
+      req.headers.get("idempotency-key") ||
+      (formData.get("idempotencyKey") as string | null) ||
+      undefined;
+
+    // Dispatch to n8n automation workflow (primary persistence owner)
     const result = await dispatchToN8nWorkflow({
       buffer: validatedFile.buffer,
       fileName: validatedFile.fileName,
       mimeType: validatedFile.mimeType,
+      idempotencyKey: idempotencyKey || undefined,
     });
 
     if (!result.success) {
@@ -90,7 +99,7 @@ export async function POST(req: NextRequest) {
 
 /**
  * GET /api/invoices
- * Returns persisted expenses from Neon PostgreSQL with pagination and filtering.
+ * Returns persisted expenses from Neon PostgreSQL with pagination, search, and filtering.
  */
 export async function GET(req: NextRequest) {
   try {
@@ -99,11 +108,9 @@ export async function GET(req: NextRequest) {
     const limit = Math.min(100, Math.max(1, parseInt(searchParams.get("limit") || "20", 10) || 20));
     const status = searchParams.get("status") as ValidationStatus | null;
     const category = searchParams.get("category") as ExpenseCategory | null;
+    const search = searchParams.get("search")?.trim() || "";
 
-    const where: {
-      validationStatus?: string;
-      category?: string;
-    } = {};
+    const where: Prisma.ExpenseWhereInput = {};
 
     if (
       status &&
@@ -127,6 +134,14 @@ export async function GET(req: NextRequest) {
       where.category = category;
     }
 
+    if (search) {
+      where.OR = [
+        { vendor: { contains: search, mode: "insensitive" } },
+        { invoiceNumber: { contains: search, mode: "insensitive" } },
+        { description: { contains: search, mode: "insensitive" } },
+      ];
+    }
+
     const skip = (page - 1) * limit;
 
     const [total, expenses] = await Promise.all([
@@ -141,10 +156,12 @@ export async function GET(req: NextRequest) {
 
     const formattedExpenses = expenses.map((e) => ({
       id: e.id,
+      idempotencyKey: e.idempotencyKey,
       expenseDate: e.expenseDate ? e.expenseDate.toISOString().slice(0, 10) : null,
       vendor: e.vendor,
       invoiceNumber: e.invoiceNumber,
       description: e.description,
+      subtotalAmount: e.subtotalAmount ? e.subtotalAmount.toString() : null,
       amount: e.amount ? e.amount.toString() : null,
       currency: e.currency,
       taxAmount: e.taxAmount ? e.taxAmount.toString() : null,
@@ -167,7 +184,7 @@ export async function GET(req: NextRequest) {
         page,
         limit,
         total,
-        totalPages: Math.ceil(total / limit),
+        totalPages: Math.ceil(total / limit) || 1,
       },
     });
   } catch (error: unknown) {

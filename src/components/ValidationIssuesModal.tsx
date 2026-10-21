@@ -149,6 +149,28 @@ export function ValidationIssuesModal({
               {expense.taxAmount !== null ? `${expense.currency || ""} ${expense.taxAmount}` : "—"}
             </div>
           </div>
+
+          {expense.subtotalAmount && (
+            <div>
+              <div className="text-[11px] font-medium text-zinc-400 dark:text-zinc-500 uppercase tracking-wider">
+                Pre-Tax Subtotal
+              </div>
+              <div className="mt-0.5 font-mono font-medium text-zinc-700 dark:text-zinc-300 tabular-nums">
+                {expense.currency ? `${expense.currency} ` : ""}{expense.subtotalAmount}
+              </div>
+            </div>
+          )}
+
+          {expense.idempotencyKey && (
+            <div>
+              <div className="text-[11px] font-medium text-zinc-400 dark:text-zinc-500 uppercase tracking-wider">
+                Idempotency Key
+              </div>
+              <div className="mt-0.5 font-mono text-[11px] text-zinc-600 dark:text-zinc-400 truncate">
+                {expense.idempotencyKey}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Validation Issues / Audit Log */}

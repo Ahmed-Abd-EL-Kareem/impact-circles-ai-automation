@@ -6,7 +6,7 @@ import type {
   ValidatedExpenseResult,
 } from "../types/expense.ts";
 
-const ALLOWED_CATEGORIES: Set<ExpenseCategory> = new Set([
+export const ALLOWED_CATEGORIES: Set<ExpenseCategory> = new Set([
   "personnel",
   "travel",
   "equipment",
@@ -151,10 +151,11 @@ export function validateExpenseDate(raw: unknown): {
 
 /**
  * Validates decimal amount strings without floating point arithmetic errors.
+ * Rejects malformed numbers and enforces positive totals.
  */
 export function validateDecimalAmount(
   raw: unknown,
-  fieldName: "amount" | "taxAmount"
+  fieldName: "amount" | "taxAmount" | "subtotalAmount"
 ): {
   amountStr: string | null;
   numericVal: number | null;
@@ -176,12 +177,34 @@ export function validateDecimalAmount(
     };
   }
 
-  // Convert number to string if needed
-  let cleaned = String(raw).trim().replace(/,/g, "");
-  // Remove leading currency signs or whitespace
-  cleaned = cleaned.replace(/^[^0-9.-]+/, "");
+  let cleaned = String(raw).trim();
+  cleaned = cleaned.replace(/^["']|["']$/g, "").trim();
 
-  if (!cleaned || cleaned === "-" || cleaned === "." || !/^-?\d+(\.\d+)?$/.test(cleaned)) {
+  // Strip leading currency signs if directly prepended
+  cleaned = cleaned.replace(/^(\$|€|£|¥|US\$|LE|EGP|AED|SAR)\s*/i, "").trim();
+
+  // If formatted with thousands comma separators, remove them only if validly structured
+  if (/^\d{1,3}(,\d{3})+(\.\d+)?$/.test(cleaned)) {
+    cleaned = cleaned.replace(/,/g, "");
+  }
+
+  // Strictly check that cleaned string is a pure decimal number
+  if (!/^-?\d+(\.\d+)?$/.test(cleaned)) {
+    return {
+      amountStr: null,
+      numericVal: null,
+      issue: {
+        code: `INVALID_${fieldName.toUpperCase()}`,
+        message: `Field "${fieldName}" value "${raw}" is not a valid decimal number.`,
+        severity: "error",
+        field: fieldName,
+      },
+    };
+  }
+
+  const parsed = Number(cleaned);
+
+  if (isNaN(parsed)) {
     return {
       amountStr: null,
       numericVal: null,
@@ -194,19 +217,34 @@ export function validateDecimalAmount(
     };
   }
 
-  const parsed = Number(cleaned);
-
-  if (parsed < 0) {
-    return {
-      amountStr: null,
-      numericVal: null,
-      issue: {
-        code: `NEGATIVE_${fieldName.toUpperCase()}`,
-        message: `Field "${fieldName}" cannot be negative (${cleaned}).`,
-        severity: "error",
-        field: fieldName,
-      },
-    };
+  // Total amounts must be strictly positive (> 0)
+  if (fieldName === "amount") {
+    if (parsed <= 0) {
+      return {
+        amountStr: parsed.toFixed(2),
+        numericVal: parsed,
+        issue: {
+          code: parsed === 0 ? "ZERO_AMOUNT" : "NEGATIVE_AMOUNT",
+          message: `Total amount must be strictly positive (got ${parsed.toFixed(2)}).`,
+          severity: "error",
+          field: "amount",
+        },
+      };
+    }
+  } else {
+    // taxAmount and subtotalAmount cannot be negative
+    if (parsed < 0) {
+      return {
+        amountStr: parsed.toFixed(2),
+        numericVal: parsed,
+        issue: {
+          code: `NEGATIVE_${fieldName.toUpperCase()}`,
+          message: `Field "${fieldName}" cannot be negative (${parsed.toFixed(2)}).`,
+          severity: "error",
+          field: fieldName,
+        },
+      };
+    }
   }
 
   if (parsed > 100_000_000) {
@@ -230,12 +268,13 @@ export function validateDecimalAmount(
 
 /**
  * Validates category against approved enumeration.
+ * Falls back to "uncategorized" with a review warning on invalid or missing values.
  */
 export function validateCategory(raw: unknown): {
   category: ExpenseCategory;
   issue?: ValidationIssue;
 } {
-  if (typeof raw === "string") {
+  if (typeof raw === "string" && raw.trim()) {
     const normalized = raw.trim().toLowerCase() as ExpenseCategory;
     if (ALLOWED_CATEGORIES.has(normalized)) {
       return { category: normalized };
@@ -246,7 +285,9 @@ export function validateCategory(raw: unknown): {
     category: "uncategorized",
     issue: {
       code: "UNCATEGORIZED_EXPENSE",
-      message: `Category "${String(raw)}" unrecognized; defaulted to uncategorized.`,
+      message: raw
+        ? `Category "${String(raw)}" unrecognized; defaulted to uncategorized.`
+        : "Category not provided; defaulted to uncategorized.",
       severity: "warning",
       field: "category",
     },
@@ -259,16 +300,19 @@ export function validateCategory(raw: unknown): {
  */
 export function validateExtractedExpense(
   raw: unknown,
-  sourceFileName: string
+  sourceFileName: string,
+  idempotencyKey?: string | null
 ): ValidatedExpenseResult {
   const issues: ValidationIssue[] = [];
 
   if (!raw || typeof raw !== "object") {
     return {
+      idempotencyKey: idempotencyKey || null,
       expenseDate: null,
       vendor: null,
       invoiceNumber: null,
       description: null,
+      subtotalAmount: null,
       amount: null,
       currency: null,
       taxAmount: null,
@@ -335,11 +379,15 @@ export function validateExtractedExpense(
   const taxResult = validateDecimalAmount(data.taxAmount, "taxAmount");
   if (taxResult.issue) issues.push(taxResult.issue);
 
-  // 8. Category
+  // 8. Subtotal Amount
+  const subResult = validateDecimalAmount(data.subtotalAmount, "subtotalAmount");
+  if (subResult.issue) issues.push(subResult.issue);
+
+  // 9. Category
   const catResult = validateCategory(data.category);
   if (catResult.issue) issues.push(catResult.issue);
 
-  // 9. Cross-field arithmetic sanity check
+  // 10. Cross-field arithmetic sanity checks
   if (amountResult.numericVal !== null && taxResult.numericVal !== null) {
     if (taxResult.numericVal > amountResult.numericVal) {
       issues.push({
@@ -350,27 +398,24 @@ export function validateExtractedExpense(
       });
     }
 
-    // If subtotal is present, check subtotal + tax = total
-    if (data.subtotalAmount) {
-      const subResult = validateDecimalAmount(data.subtotalAmount, "amount");
-      if (subResult.numericVal !== null) {
-        const calculatedTotal = subResult.numericVal + taxResult.numericVal;
-        const diff = Math.abs(calculatedTotal - amountResult.numericVal);
-        if (diff > 0.05) {
-          issues.push({
-            code: "ARITHMETIC_MISMATCH",
-            message: `Subtotal (${subResult.amountStr}) + Tax (${taxResult.amountStr}) = ${calculatedTotal.toFixed(
-              2
-            )}, which does not match Total (${amountResult.amountStr}).`,
-            severity: "warning",
-            field: "amount",
-          });
-        }
+    // When subtotal, tax, and total are all available: verify subtotal + tax == total within 0.02 tolerance
+    if (subResult.numericVal !== null) {
+      const calculatedTotal = subResult.numericVal + taxResult.numericVal;
+      const diff = Math.abs(calculatedTotal - amountResult.numericVal);
+      if (diff > 0.02) {
+        issues.push({
+          code: "ARITHMETIC_MISMATCH",
+          message: `Subtotal (${subResult.amountStr}) + Tax (${taxResult.amountStr}) = ${calculatedTotal.toFixed(
+            2
+          )}, which does not match Total (${amountResult.amountStr}) within 0.02 tolerance.`,
+          severity: "warning",
+          field: "amount",
+        });
       }
     }
   }
 
-  // 10. Pass through any model-identified issues
+  // 11. Pass through model-identified issues
   if (Array.isArray(data.validationIssues)) {
     for (const modelIssue of data.validationIssues) {
       if (
@@ -388,8 +433,8 @@ export function validateExtractedExpense(
     }
   }
 
-  // 11. Determine validation status
-  // An expense is valid ONLY if all primary fields exist, there are no error-severity issues, and amount/currency exist.
+  // 12. Determine validation status
+  // An expense is valid ONLY if all primary fields exist, there are zero errors, zero warnings, and core fields are positive & normalized.
   const hasErrors = issues.some((i) => i.severity === "error");
   const missingCoreFields =
     !vendor || !amountResult.amountStr || !currencyResult.currency;
@@ -400,10 +445,12 @@ export function validateExtractedExpense(
   }
 
   return {
+    idempotencyKey: idempotencyKey || null,
     expenseDate: dateResult.date,
     vendor,
     invoiceNumber,
     description,
+    subtotalAmount: subResult.amountStr,
     amount: amountResult.amountStr,
     currency: currencyResult.currency,
     taxAmount: taxResult.amountStr,

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { Header } from "@/components/Header";
 import { SummaryCards } from "@/components/SummaryCards";
 import { DocumentUploadZone } from "@/components/DocumentUploadZone";
@@ -14,6 +14,7 @@ export default function FinanceDashboardPage() {
   const [isLoadingSummary, setIsLoadingSummary] = useState(true);
   const [isLoadingExpenses, setIsLoadingExpenses] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
 
   // Filters & Pagination
   const [statusFilter, setStatusFilter] = useState("all");
@@ -25,9 +26,10 @@ export default function FinanceDashboardPage() {
   const [inspectedExpense, setInspectedExpense] = useState<ExpenseRecord | null>(null);
 
   // Combined refresh handler
-  const handleRefresh = async () => {
+  const handleRefresh = useCallback(async () => {
     setIsRefreshing(true);
     setIsLoadingExpenses(true);
+    setFetchError(null);
     try {
       const params = new URLSearchParams();
       params.set("page", String(currentPage));
@@ -45,65 +47,84 @@ export default function FinanceDashboardPage() {
         expensesRes.json(),
       ]);
 
-      if (summaryData.success) setSummary(summaryData.data);
+      if (summaryData.success) {
+        setSummary(summaryData.data);
+      } else {
+        setFetchError(summaryData.error || "Failed to load financial summary.");
+      }
+
       if (expensesData.success) {
         setExpenses(expensesData.data);
         if (expensesData.pagination) {
           setTotalPages(expensesData.pagination.totalPages || 1);
         }
+      } else {
+        setFetchError(expensesData.error || "Failed to load expense ledger.");
       }
     } catch (e) {
-      console.error("Refresh failed:", e);
+      const msg = e instanceof Error ? e.message : "Network error";
+      setFetchError(`Connection error: ${msg}`);
     } finally {
       setIsRefreshing(false);
       setIsLoadingExpenses(false);
+      setIsLoadingSummary(false);
     }
-  };
+  }, [currentPage, statusFilter, categoryFilter]);
 
   useEffect(() => {
-    let isMounted = true;
-    fetch("/api/finance/summary")
-      .then((res) => res.json())
-      .then((data) => {
-        if (isMounted && data.success) {
-          setSummary(data.data);
+    let ignore = false;
+
+    async function loadInitialData() {
+      try {
+        const params = new URLSearchParams();
+        params.set("page", String(currentPage));
+        params.set("limit", "15");
+        if (statusFilter !== "all") params.set("status", statusFilter);
+        if (categoryFilter !== "all") params.set("category", categoryFilter);
+
+        const [summaryRes, expensesRes] = await Promise.all([
+          fetch("/api/finance/summary"),
+          fetch(`/api/invoices?${params.toString()}`),
+        ]);
+
+        const [summaryData, expensesData] = await Promise.all([
+          summaryRes.json(),
+          expensesRes.json(),
+        ]);
+
+        if (ignore) return;
+
+        if (summaryData.success) {
+          setSummary(summaryData.data);
+        } else {
+          setFetchError(summaryData.error || "Failed to load financial summary.");
         }
-      })
-      .catch((err) => console.error("Failed to load summary:", err))
-      .finally(() => {
-        if (isMounted) setIsLoadingSummary(false);
-      });
 
-    return () => {
-      isMounted = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    let isMounted = true;
-    const params = new URLSearchParams();
-    params.set("page", String(currentPage));
-    params.set("limit", "15");
-    if (statusFilter !== "all") params.set("status", statusFilter);
-    if (categoryFilter !== "all") params.set("category", categoryFilter);
-
-    fetch(`/api/invoices?${params.toString()}`)
-      .then((res) => res.json())
-      .then((data) => {
-        if (isMounted && data.success) {
-          setExpenses(data.data);
-          if (data.pagination) {
-            setTotalPages(data.pagination.totalPages || 1);
+        if (expensesData.success) {
+          setExpenses(expensesData.data);
+          if (expensesData.pagination) {
+            setTotalPages(expensesData.pagination.totalPages || 1);
           }
+        } else {
+          setFetchError(expensesData.error || "Failed to load expense ledger.");
         }
-      })
-      .catch((err) => console.error("Failed to load expenses:", err))
-      .finally(() => {
-        if (isMounted) setIsLoadingExpenses(false);
-      });
+      } catch (e) {
+        if (!ignore) {
+          const msg = e instanceof Error ? e.message : "Network error";
+          setFetchError(`Connection error: ${msg}`);
+        }
+      } finally {
+        if (!ignore) {
+          setIsLoadingExpenses(false);
+          setIsLoadingSummary(false);
+        }
+      }
+    }
+
+    loadInitialData();
 
     return () => {
-      isMounted = false;
+      ignore = true;
     };
   }, [currentPage, statusFilter, categoryFilter]);
 
@@ -115,9 +136,30 @@ export default function FinanceDashboardPage() {
 
   return (
     <div className="min-h-screen bg-slate-50/70 font-sans text-zinc-900 antialiased dark:bg-[#090a0f] dark:text-zinc-100 selection:bg-emerald-500/20 selection:text-emerald-700 dark:selection:text-emerald-300">
-      <Header onRefresh={handleRefresh} isRefreshing={isRefreshing} />
+      <Header onRefresh={handleRefresh} isRefreshing={isRefreshing} hasError={!!fetchError} />
 
       <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8 space-y-8">
+        {/* Error Alert Banner */}
+        {fetchError && (
+          <div
+            role="alert"
+            className="flex items-center justify-between rounded-2xl border border-rose-500/20 bg-rose-50/80 p-4 text-xs font-medium text-rose-800 shadow-xs dark:border-rose-500/25 dark:bg-rose-950/40 dark:text-rose-200"
+          >
+            <div className="flex items-center gap-2.5">
+              <svg className="h-4 w-4 shrink-0 text-rose-600 dark:text-rose-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+              <span>{fetchError}</span>
+            </div>
+            <button
+              onClick={handleRefresh}
+              className="apple-press rounded-lg bg-rose-100 px-2.5 py-1 text-xs font-semibold text-rose-800 hover:bg-rose-200 dark:bg-rose-900/60 dark:text-rose-100 dark:hover:bg-rose-800 cursor-pointer"
+            >
+              Retry
+            </button>
+          </div>
+        )}
+
         {/* Top Summary Banner */}
         <section aria-labelledby="summary-heading" className="space-y-3">
           <div className="flex items-center justify-between">
