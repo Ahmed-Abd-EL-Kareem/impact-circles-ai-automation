@@ -1,0 +1,229 @@
+{
+  "name": "Finance Document Processing Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "impact-circles-ai-automation",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "18f09230-07e1-4566-a365-1d4281fcae10",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ],
+      "webhookId": "impact-circles-ai-automation"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Verify shared secret and payload\nconst headers = $input.item.json.headers || {};\nconst secretHeader = headers['x-webhook-secret'] || headers['X-Webhook-Secret'];\nconst expectedSecret = $env.N8N_WEBHOOK_SECRET;\n\nif (!secretHeader || secretHeader !== expectedSecret) {\n  throw new Error('Unauthorized: Invalid or missing webhook shared secret.');\n}\n\nconst body = $input.item.json.body || {};\nif (!body.fileData || !body.fileName || !body.mimeType) {\n  throw new Error('Bad Request: Missing required document payload fields (fileData, fileName, mimeType).');\n}\n\nreturn {\n  fileData: body.fileData,\n  fileName: body.fileName,\n  mimeType: body.mimeType,\n  idempotencyKey: body.idempotencyKey || null\n};"
+      },
+      "id": "c7a88481-c30d-4001-9a74-95a287235b2a",
+      "name": "Validate Request & Secret",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://generativelanguage.googleapis.com/v1beta/models/{{ $env.GEMINI_MODEL || 'gemini-flash-latest' }}:generateContent?key={{ $env.GEMINI_API_KEY }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"contents\": [\n    {\n      \"parts\": [\n        {\n          \"inlineData\": {\n            \"mimeType\": \"{{ $json.mimeType }}\",\n            \"data\": \"{{ $json.fileData }}\"\n          }\n        },\n        {\n          \"text\": \"Extract structured financial data from this document. Return ONLY valid JSON matching this schema:\\n{\\n  \\\"expenseDate\\\": \\\"YYYY-MM-DD or null\\\",\\n  \\\"vendor\\\": \\\"string or null\\\",\\n  \\\"invoiceNumber\\\": \\\"string or null\\\",\\n  \\\"description\\\": \\\"string or null\\\",\\n  \\\"amount\\\": \\\"decimal string (e.g. '120.50') or null\\\",\\n  \\\"currency\\\": \\\"3-letter currency code or null\\\",\\n  \\\"taxAmount\\\": \\\"decimal string or null\\\",\\n  \\\"subtotalAmount\\\": \\\"decimal string or null\\\",\\n  \\\"category\\\": \\\"personnel | travel | equipment | software | events | operational | uncategorized\\\",\\n  \\\"confidence\\\": {\\n    \\\"expenseDate\\\": 0.0 to 1.0,\\n    \\\"vendor\\\": 0.0 to 1.0,\\n    \\\"amount\\\": 0.0 to 1.0,\\n    \\\"currency\\\": 0.0 to 1.0\\n  },\\n  \\\"validationIssues\\\": []\\n}\\nRules: Never fabricate values. Use null for missing fields. Do not convert currencies. If subtotal and tax are present, verify they match total.\"\n        }\n      ]\n    }\n  ],\n  \"generationConfig\": {\n    \"responseMimeType\": \"application/json\",\n    \"temperature\": 0.1\n  }\n}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "2bfa7991-872e-41bc-9e11-e402636cf401",
+      "name": "Gemini Extraction Call",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.item.json;\nconst prev = $('Validate Request & Secret').first().json;\n\nlet rawText = '';\ntry {\n  rawText = response.candidates[0].content.parts[0].text;\n} catch (e) {\n  throw new Error('Gemini API returned an invalid or empty response structure.');\n}\n\nlet data = {};\ntry {\n  data = JSON.parse(rawText.trim());\n} catch (e) {\n  throw new Error('Failed to parse Gemini output as JSON: ' + rawText.slice(0, 100));\n}\n\nconst issues = Array.isArray(data.validationIssues) ? [...data.validationIssues] : [];\n\n// 1. Sanitize & Validate Vendor\nlet vendor = typeof data.vendor === 'string' && data.vendor.trim() ? data.vendor.trim().slice(0, 255) : null;\nif (!vendor) {\n  issues.push({ code: 'MISSING_VENDOR', message: 'Vendor name could not be identified', severity: 'warning', field: 'vendor' });\n}\n\n// 2. Invoice Number\nlet invoiceNumber = typeof data.invoiceNumber === 'string' && data.invoiceNumber.trim() ? data.invoiceNumber.trim().slice(0, 100) : null;\nif (!invoiceNumber) {\n  issues.push({ code: 'MISSING_INVOICE_NUMBER', message: 'Invoice number was not found', severity: 'warning', field: 'invoiceNumber' });\n}\n\n// 3. Description\nlet description = typeof data.description === 'string' && data.description.trim() ? data.description.trim().slice(0, 1000) : null;\n\n// 4. Validate Date\nlet expenseDate = null;\nif (typeof data.expenseDate === 'string' && /^\\d{4}-\\d{2}-\\d{2}$/.test(data.expenseDate.trim())) {\n  expenseDate = data.expenseDate.trim();\n} else {\n  issues.push({ code: 'MISSING_OR_INVALID_DATE', message: 'Missing or invalid YYYY-MM-DD date', severity: 'warning', field: 'expenseDate' });\n}\n\n// 5. Amount & Bounds\nlet amount = null;\nlet parsedAmount = null;\nif (data.amount !== null && data.amount !== undefined) {\n  const cleanAmount = String(data.amount).replace(/[^0-9.-]/g, '');\n  parsedAmount = parseFloat(cleanAmount);\n  if (isNaN(parsedAmount) || parsedAmount < 0) {\n    issues.push({ code: 'INVALID_AMOUNT', message: 'Amount is invalid or negative', severity: 'error', field: 'amount' });\n  } else {\n    amount = parsedAmount.toFixed(2);\n  }\n} else {\n  issues.push({ code: 'MISSING_AMOUNT', message: 'Total amount was not found', severity: 'error', field: 'amount' });\n}\n\n// 6. Currency\nlet currency = null;\nif (typeof data.currency === 'string' && data.currency.trim()) {\n  const upperCurr = data.currency.trim().toUpperCase();\n  currency = upperCurr.slice(0, 10);\n  if (!/^[A-Z]{3}$/.test(currency)) {\n    issues.push({ code: 'NON_STANDARD_CURRENCY', message: `Currency ${currency} is non-standard`, severity: 'warning', field: 'currency' });\n  }\n} else {\n  issues.push({ code: 'MISSING_CURRENCY', message: 'Currency code was not found', severity: 'error', field: 'currency' });\n}\n\n// 7. Tax Amount\nlet taxAmount = null;\nif (data.taxAmount !== null && data.taxAmount !== undefined) {\n  const cleanTax = String(data.taxAmount).replace(/[^0-9.-]/g, '');\n  const parsedTax = parseFloat(cleanTax);\n  if (!isNaN(parsedTax) && parsedTax >= 0) {\n    taxAmount = parsedTax.toFixed(2);\n    if (parsedAmount !== null && parsedTax > parsedAmount) {\n      issues.push({ code: 'TAX_EXCEEDS_TOTAL', message: 'Tax amount exceeds total amount', severity: 'error', field: 'taxAmount' });\n    }\n  }\n}\n\n// 8. Category\nconst validCategories = ['personnel', 'travel', 'equipment', 'software', 'events', 'operational', 'uncategorized'];\nlet category = 'uncategorized';\nif (typeof data.category === 'string' && validCategories.includes(data.category.trim().toLowerCase())) {\n  category = data.category.trim().toLowerCase();\n} else {\n  issues.push({ code: 'DEFAULT_CATEGORY', message: 'Category defaulted to uncategorized', severity: 'warning', field: 'category' });\n}\n\n// 9. Initial Status\nlet validationStatus = 'valid';\nconst hasErrors = issues.some(i => i.severity === 'error');\nif (hasErrors || !vendor || !amount || !currency || issues.length > 0) {\n  validationStatus = 'needs_review';\n}\n\nreturn {\n  expenseDate,\n  vendor,\n  invoiceNumber,\n  description,\n  amount,\n  currency,\n  taxAmount,\n  category,\n  validationStatus,\n  validationIssues: JSON.stringify(issues),\n  sourceFileName: prev.fileName,\n  idempotencyKey: prev.idempotencyKey\n};"
+      },
+      "id": "e4a2bc19-5e74-4b47-b852-6cf21532bb9a",
+      "name": "Validate & Sanitize Extraction",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        920,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT id, vendor, \"invoiceNumber\", amount, currency, \"expenseDate\"\nFROM \"Expense\"\nWHERE (\n  \"vendor\" ILIKE {{ $json.vendor ? `'` + $json.vendor.replace(/'/g, \"''\") + `'` : 'NULL' }}\n  AND (\n    (\n      \"invoiceNumber\" IS NOT NULL\n      AND {{ $json.invoiceNumber ? `'` + $json.invoiceNumber.replace(/'/g, \"''\") + `'` : 'NULL' }} IS NOT NULL\n      AND \"invoiceNumber\" ILIKE {{ $json.invoiceNumber ? `'` + $json.invoiceNumber.replace(/'/g, \"''\") + `'` : 'NULL' }}\n      AND amount = {{ $json.amount || 0 }}\n      AND currency ILIKE {{ $json.currency ? `'` + $json.currency.replace(/'/g, \"''\") + `'` : 'NULL' }}\n    )\n    OR\n    (\n      \"invoiceNumber\" IS NULL\n      AND {{ $json.invoiceNumber ? 'FALSE' : 'TRUE' }}\n      AND \"expenseDate\"::date = {{ $json.expenseDate ? `'` + $json.expenseDate + `'::date` : 'NULL' }}\n      AND amount = {{ $json.amount || 0 }}\n      AND currency ILIKE {{ $json.currency ? `'` + $json.currency.replace(/'/g, \"''\") + `'` : 'NULL' }}\n    )\n  )\n)\nLIMIT 1;"
+      },
+      "id": "f5b61189-1122-49da-9533-31f822cc47b2",
+      "name": "Check Duplicate in Neon Postgres",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1160,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "neon-postgres-credentials",
+          "name": "Neon Postgres (Database)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const duplicateCheck = $input.item.json;\nconst extracted = $('Validate & Sanitize Extraction').first().json;\n\nconst issues = JSON.parse(extracted.validationIssues || '[]');\nlet status = extracted.validationStatus;\n\n// If query returned a row, it's a duplicate candidate\nif (duplicateCheck && duplicateCheck.id) {\n  status = 'duplicate_suspected';\n  issues.push({\n    code: 'DUPLICATE_CANDIDATE',\n    message: `Suspected duplicate of existing expense record ID ${duplicateCheck.id}`,\n    severity: 'warning'\n  });\n}\n\n// Generate standard CUID-like or UUID identifier for Postgres insert\nconst generatedId = 'exp_' + Date.now().toString(36) + Math.random().toString(36).substring(2, 8);\n\nreturn {\n  id: generatedId,\n  expenseDate: extracted.expenseDate,\n  vendor: extracted.vendor,\n  invoiceNumber: extracted.invoiceNumber,\n  description: extracted.description,\n  amount: extracted.amount,\n  currency: extracted.currency,\n  taxAmount: extracted.taxAmount,\n  category: extracted.category,\n  validationStatus: status,\n  validationIssues: JSON.stringify(issues),\n  sourceFileName: extracted.sourceFileName\n};"
+      },
+      "id": "8e31249b-76a1-4ce8-b0a5-f860fa011a43",
+      "name": "Evaluate Duplicate Flag",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1400,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=INSERT INTO \"Expense\" (\n  \"id\",\n  \"expenseDate\",\n  \"vendor\",\n  \"invoiceNumber\",\n  \"description\",\n  \"amount\",\n  \"currency\",\n  \"taxAmount\",\n  \"category\",\n  \"validationStatus\",\n  \"validationIssues\",\n  \"sourceFileName\",\n  \"createdAt\",\n  \"updatedAt\"\n) VALUES (\n  '{{ $json.id }}',\n  {{ $json.expenseDate ? `'` + $json.expenseDate + `'::timestamp` : 'NULL' }},\n  {{ $json.vendor ? `'` + $json.vendor.replace(/'/g, \"''\") + `'` : 'NULL' }},\n  {{ $json.invoiceNumber ? `'` + $json.invoiceNumber.replace(/'/g, \"''\") + `'` : 'NULL' }},\n  {{ $json.description ? `'` + $json.description.replace(/'/g, \"''\") + `'` : 'NULL' }},\n  {{ $json.amount ? $json.amount : 'NULL' }},\n  {{ $json.currency ? `'` + $json.currency.replace(/'/g, \"''\") + `'` : 'NULL' }},\n  {{ $json.taxAmount ? $json.taxAmount : 'NULL' }},\n  '{{ $json.category }}',\n  '{{ $json.validationStatus }}',\n  '{{ $json.validationIssues.replace(/'/g, \"''\") }}'::jsonb,\n  '{{ $json.sourceFileName.replace(/'/g, \"''\") }}',\n  NOW(),\n  NOW()\n)\nRETURNING *;"
+      },
+      "id": "31adcb18-6902-4f33-8a27-eb6368d37482",
+      "name": "Persist Expense into Neon Postgres",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1640,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "neon-postgres-credentials",
+          "name": "Neon Postgres (Database)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"success\": true,\n  \"expense\": $json\n}",
+        "options": {
+          "responseCode": 201
+        }
+      },
+      "id": "92dae432-8df6-48c9-b223-93cf258d4a99",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1880,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Validate Request & Secret",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Request & Secret": {
+      "main": [
+        [
+          {
+            "node": "Gemini Extraction Call",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Extraction Call": {
+      "main": [
+        [
+          {
+            "node": "Validate & Sanitize Extraction",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate & Sanitize Extraction": {
+      "main": [
+        [
+          {
+            "node": "Check Duplicate in Neon Postgres",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Duplicate in Neon Postgres": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Duplicate Flag",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate Duplicate Flag": {
+      "main": [
+        [
+          {
+            "node": "Persist Expense into Neon Postgres",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Persist Expense into Neon Postgres": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

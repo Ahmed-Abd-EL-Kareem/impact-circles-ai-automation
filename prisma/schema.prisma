@@ -1,0 +1,30 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Expense {
+  id               String    @id @default(cuid())
+  expenseDate      DateTime?
+  vendor           String?
+  invoiceNumber    String?
+  description      String?
+  amount           Decimal?  @db.Decimal(12, 2)
+  currency         String?
+  taxAmount        Decimal?  @db.Decimal(12, 2)
+  category         String    @default("uncategorized")
+  validationStatus String    @default("needs_review")
+  validationIssues Json      @default("[]")
+  sourceFileName   String
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([vendor, invoiceNumber])
+  @@index([validationStatus])
+  @@index([createdAt])
+  @@index([expenseDate])
+  @@index([category])
+}
