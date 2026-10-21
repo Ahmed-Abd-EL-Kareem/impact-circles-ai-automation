@@ -18,11 +18,18 @@ We audited, repaired, and hardened the production-grade vertical slice that inge
   - Replaced vulnerable query branching with `SELECT (SELECT json_build_object(...) ...) AS "matchedCandidate"`, ensuring PostgreSQL always returns exactly 1 item (either containing the candidate match or `null`).
   - Downstream nodes never stall or hang on non-duplicate invoices.
 - **Strict SQL Parameterization**:
-  - Eliminated manual SQL string interpolation across all database nodes (`Check Duplicate in Neon Postgres` and `Persist Expense into Neon Postgres`).
+  - Eliminated manual SQL string interpolation across all database nodes (`Check Existing Idempotency in Postgres`, `Check Duplicate in Neon Postgres`, and `Persist Expense into Neon Postgres`).
   - Switched to PostgreSQL bound query parameters (`$1..$N`) using `options.queryReplacement` mapped to `$json` values, fully safeguarding against SQL injection.
-- **Request-Level Idempotency**:
+- **Early Request-Level Idempotency Fast-Path**:
+  - Immediately following authentication and payload validation, n8n queries Neon PostgreSQL for `idempotencyKey`.
+  - If a record with that key already exists, the workflow branches directly to `Format Replay Response` and returns the persisted record in ~270ms, completely bypassing Gemini API extraction and duplicate check queries to conserve AI quota and reduce latency.
   - Added unique constraint on `idempotencyKey` in the `Expense` table.
   - Persistence query uses `ON CONFLICT ("idempotencyKey") DO UPDATE SET "updatedAt" = "Expense"."updatedAt" RETURNING *`, guaranteeing atomic duplicate prevention and safe retry replay under concurrency.
+- **Deterministic Error Handling & Coordinated Timeouts**:
+  - Enabled `onError: "continueErrorOutput"` on `Gemini Extraction Call`, `Check Existing Idempotency in Postgres`, `Check Duplicate in Neon Postgres`, and `Persist Expense into Neon Postgres`.
+  - Added `Format Gemini Error` (mapping HTTP 429, 502, 503 from upstream AI to safe, sanitised messages and HTTP status codes) and `Format Database Error`.
+  - Unified all failure paths into `Respond with Error`, ensuring a failed processing step never produces a false success response.
+  - Gemini extraction timeout configured to 40 seconds with 2 retries; Next.js client timeouts coordinated to 90 seconds (`AbortSignal.timeout(90000)`).
 - **Single Persistence Ownership**:
   - n8n remains the single orchestration and persistence owner in production mode; the Next.js API delegates via webhook and receives the persisted record.
 
@@ -35,14 +42,19 @@ We audited, repaired, and hardened the production-grade vertical slice that inge
   - Configured `@prisma/adapter-pg` connection pooler via `prisma.config.ts` and `src/lib/db.ts`.
 
 ### C. Financial Validation & AI Extraction
+- **Header Authentication & Credential Protection**:
+  - Authenticates with Google Gemini API strictly via the `x-goog-api-key` header (never exposing API keys in URLs or query parameters).
+  - Scrubs API keys and secrets from error messages and logs before responding to clients.
+  - Defaults to `gemini-flash-lite-latest` with exponential backoff retry to gracefully withstand upstream rate spikes.
 - **Arithmetic Guardrails**:
   - Validates `subtotal + tax == total` within a \$0.02 tolerance; records `ARITHMETIC_MISMATCH` warning when violated.
   - Rejects zero, negative, or malformed total amounts (`ZERO_AMOUNT`, `NEGATIVE_AMOUNT`).
   - Flags negative tax amounts and tax amounts exceeding total.
-- **ISO 4217 Currency Normalization**:
+- **ISO 4217 Currency Normalization & Aggregation Policy**:
   - Standardizes currency symbols (`$`, `€`, `£`, `LE`, `EGP`, `AED`, `SAR`) to 3-letter ISO codes.
   - Unknown or non-standard currencies are flagged rather than silently accepted.
   - **Zero Cross-Currency Addition**: Financial reporting is strictly segregated by currency.
+  - **Strict Policy Filtering**: Financial volume summaries strictly exclude `validationStatus: "failed"`, zero amounts, and negative amounts from currency totals.
 - **Controlled Categories**:
   - Restricts categories to `personnel`, `travel`, `equipment`, `software`, `events`, `operational`, `uncategorized`.
   - Unrecognized values safely fall back to `uncategorized` with an audit issue.
@@ -69,7 +81,7 @@ We audited, repaired, and hardened the production-grade vertical slice that inge
 
 ## 3. Test Suites & Verification
 
-### Unit Test Suite (50 tests across 7 test suites)
+### Unit Test Suite (55 tests across 7 test suites)
 Run with `npm test`:
 1. `tests/unit/validation-file.test.ts` (8 tests):
    - Valid PDF magic bytes (`%PDF-`), PNG, JPEG.
@@ -80,15 +92,19 @@ Run with `npm test`:
 3. `tests/unit/duplicate-detection.test.ts` (9 tests):
    - Primary matching, secondary date matching only when invoice number is absent, amount/currency mismatch immunity.
    - Idempotency replay behavior.
-4. `tests/unit/finance-summary.test.ts` (3 tests):
+4. `tests/unit/finance-summary.test.ts` (5 tests):
    - Strict currency isolation without cross-currency addition, null handling, empty list resilience.
+   - Strict exclusion of negative, zero amounts and failed records from currency totals.
+   - Floating-point arithmetic drift avoidance on decimal additions.
 5. `tests/unit/workflow-client.test.ts` (7 tests):
    - n8n offline 503 handling, secret authentication failure 401 handling, upstream error propagation, malformed response handling, persistence confirmation checks.
-6. `tests/unit/webhook-auth.test.ts` (8 tests):
+6. `tests/unit/webhook-auth.test.ts` (11 tests):
    - Fail-closed evaluation when server secret is missing or empty string.
    - Missing or mismatched `x-webhook-secret` header (HTTP 401 rejection).
    - Case-insensitive header matching (`x-webhook-secret` / `X-Webhook-Secret`).
    - Missing `fileData` or unsupported `mimeType` payload rejection (HTTP 400 rejection).
+   - 10MB decoded payload size bound enforcement.
+   - Idempotency key length and character validation constraints.
 7. `tests/unit/idempotency.test.ts` (5 tests):
    - Replay returns identical persisted expense without duplicate insertion.
    - Concurrent race protection without duplicates or database errors.

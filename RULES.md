@@ -36,9 +36,11 @@ This document establishes the mandatory architectural rules, engineering standar
 - **Workflow Security & SQL Parameterization**:
   - All database queries in n8n Postgres nodes MUST use bound parameters (`$1..$N`) via `options.queryReplacement`. NEVER interpolate variables directly into SQL strings.
   - Webhook requests must validate the `x-webhook-secret` header against `process.env.N8N_WEBHOOK_SECRET` before executing AI or database nodes. If secret is missing/empty, fail closed with HTTP 500; if header is missing or mismatched, reject with HTTP 401; if payload is malformed, reject with HTTP 400.
+  - Perform early idempotency checks against Neon PostgreSQL right after request validation to return persisted records immediately without re-invoking AI extraction.
   - Ensure duplicate check queries return a deterministic single-row item (`SELECT (SELECT ...) AS "matchedCandidate"`) so zero-match cases do not stall workflow execution.
   - Persistence queries must handle idempotency conflicts atomically via `ON CONFLICT ("idempotencyKey") DO UPDATE SET "updatedAt" = "Expense"."updatedAt" RETURNING *`.
   - Format response node returns HTTP 201 with `{ success: true, expense: $json }` directly from the confirmed persisted record.
+  - All error paths must route to `Respond with Error` returning deterministic JSON and safe HTTP status codes without leaking credentials or raw payloads.
 
 ---
 
@@ -106,7 +108,7 @@ This document establishes the mandatory architectural rules, engineering standar
 ### 4.2 Quality Gates
 - **Type Checking**: `npx tsc --noEmit` must pass with 0 errors.
 - **Linting**: `npm run lint` must pass with 0 errors and 0 warnings.
-- **Unit Tests**: `npm test` must run all 50 tests across 7 test suites with 100% pass rate.
+- **Unit Tests**: `npm test` must run all 55 tests across 7 test suites with 100% pass rate.
 - **Turbopack Build**: `npm run build` must compile cleanly without errors.
 - **Direct Pipeline Test**: `npm run test:direct` verifies Gemini extraction, schema validation, idempotency replay, and duplicate detection against Neon PostgreSQL.
 - **Production n8n E2E Test**: `npm run test:e2e` verifies live n8n fail-closed auth (401/400), valid document ingestion (201), idempotency replay, and duplicate detection. Fails non-zero if n8n is offline (zero false successes).

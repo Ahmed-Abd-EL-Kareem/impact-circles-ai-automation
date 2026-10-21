@@ -35,6 +35,8 @@ export async function GET() {
         _sum: { amount: true },
         where: {
           currency: { not: null },
+          amount: { gt: 0 },
+          validationStatus: { not: "failed" },
         },
       }),
       prisma.expense.groupBy({

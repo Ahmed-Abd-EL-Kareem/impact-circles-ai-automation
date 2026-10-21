@@ -32,14 +32,22 @@ function calculateFinanceSummary(expenses: ExpenseStub[]) {
     categoryMap.set(exp.category, (categoryMap.get(exp.category) || 0) + 1);
 
     // Currency grouping (STRICTLY separate; no cross-currency addition)
-    if (exp.currency && exp.currency.trim() && exp.amount) {
+    // Policy: Exclude records with validationStatus === "failed", null/empty currency, or amount <= 0
+    if (
+      exp.currency &&
+      exp.currency.trim() &&
+      exp.amount &&
+      exp.validationStatus !== "failed"
+    ) {
       const parsed = parseFloat(exp.amount);
-      if (!isNaN(parsed)) {
+      if (!isNaN(parsed) && parsed > 0) {
         const curr = exp.currency.trim().toUpperCase();
         const existing = currencyMap.get(curr) || { count: 0, total: 0 };
+        // Avoid floating-point arithmetic drift by working in cents/integers
+        const totalCents = Math.round(existing.total * 100) + Math.round(parsed * 100);
         currencyMap.set(curr, {
           count: existing.count + 1,
-          total: existing.total + parsed,
+          total: totalCents / 100,
         });
       }
     }
@@ -131,5 +139,47 @@ describe("Finance Summary & Currency Grouping", () => {
     assert.strictEqual(summary.duplicateSuspectedCount, 0);
     assert.strictEqual(summary.byCurrency.length, 0);
     assert.strictEqual(summary.byCategory.length, 0);
+  });
+
+  it("strictly excludes negative, zero amounts and failed records from currency totals", () => {
+    const expenses: ExpenseStub[] = [
+      { amount: "100.00", currency: "USD", validationStatus: "valid", category: "software" },
+      { amount: "-50.00", currency: "USD", validationStatus: "needs_review", category: "software" }, // negative
+      { amount: "0.00", currency: "USD", validationStatus: "needs_review", category: "software" }, // zero
+      { amount: "500.00", currency: "USD", validationStatus: "failed", category: "operational" }, // failed validation
+      { amount: "250.50", currency: "EUR", validationStatus: "valid", category: "travel" },
+      { amount: "-100.00", currency: "EUR", validationStatus: "failed", category: "travel" }, // failed negative
+    ];
+
+    const summary = calculateFinanceSummary(expenses);
+
+    // All records are counted in totalExpenses for visibility/audit
+    assert.strictEqual(summary.totalExpenses, 6);
+    assert.strictEqual(summary.validCount, 2);
+
+    // USD group must ONLY sum the 100.00 valid positive amount (negative, zero, and failed strictly excluded)
+    const usd = summary.byCurrency.find((c) => c.currency === "USD");
+    assert.ok(usd);
+    assert.strictEqual(usd.count, 1);
+    assert.strictEqual(usd.totalAmount, "100.00");
+
+    // EUR group must ONLY sum the 250.50 amount
+    const eur = summary.byCurrency.find((c) => c.currency === "EUR");
+    assert.ok(eur);
+    assert.strictEqual(eur.count, 1);
+    assert.strictEqual(eur.totalAmount, "250.50");
+  });
+
+  it("avoids floating-point arithmetic drift on decimal additions", () => {
+    const expenses: ExpenseStub[] = [
+      { amount: "0.10", currency: "USD", validationStatus: "valid", category: "software" },
+      { amount: "0.20", currency: "USD", validationStatus: "valid", category: "software" },
+      { amount: "0.70", currency: "USD", validationStatus: "valid", category: "software" },
+    ];
+
+    const summary = calculateFinanceSummary(expenses);
+    const usd = summary.byCurrency.find((c) => c.currency === "USD");
+    assert.ok(usd);
+    assert.strictEqual(usd.totalAmount, "1.00"); // Not 1.0000000000000002
   });
 });

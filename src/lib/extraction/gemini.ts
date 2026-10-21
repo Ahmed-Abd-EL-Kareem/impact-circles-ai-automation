@@ -45,14 +45,8 @@ export async function extractWithGemini(
     return { success: false, error: "GEMINI_API_KEY is not configured on the server." };
   }
 
-  // Use configured model or fall back to verified working model gemini-flash-latest
-  let modelName = process.env.GEMINI_MODEL || "gemini-flash-latest";
-  // Fix common typo in older env files
-  if (modelName === "gemini-3.1-flash-light") {
-    modelName = "gemini-3.1-flash-lite";
-  }
-
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
+  // Use configured model or fall back to verified working model gemini-flash-lite-latest
+  const modelName = (process.env.GEMINI_MODEL || "gemini-flash-lite-latest").replace(/["']/g, "").trim();
 
   const base64Data = fileBuffer.toString("base64");
 
@@ -78,24 +72,64 @@ export async function extractWithGemini(
     },
   };
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
+  const callModel = async (model: string) => {
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 40000); // 40s bounded timeout
+
+    try {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": apiKey,
+        },
+        body: JSON.stringify(requestBody),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+      return response;
+    } catch (e: unknown) {
+      clearTimeout(timeoutId);
+      if (e instanceof Error && e.name === "AbortError") {
+        throw new Error("Gemini API request timed out after 40 seconds.");
+      }
+      throw e;
+    }
+  };
 
   try {
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(requestBody),
-      signal: controller.signal,
-    });
+    const MAX_RETRIES = 5;
+    let attempt = 0;
+    let response: Response | null = null;
 
-    clearTimeout(timeoutId);
+    while (attempt < MAX_RETRIES) {
+      attempt++;
+      try {
+        response = await callModel(modelName);
+      } catch (err: unknown) {
+        if (attempt >= MAX_RETRIES) throw err;
+        await new Promise((resolve) => setTimeout(resolve, Math.min(3000 * attempt, 10000)));
+        continue;
+      }
 
-    if (!response.ok) {
-      const errorText = await response.text();
+      if ((response.status === 503 || response.status === 429) && attempt < MAX_RETRIES) {
+        const backoffMs = Math.min(3000 * Math.pow(1.6, attempt), 12000);
+        await new Promise((resolve) => setTimeout(resolve, backoffMs));
+        continue;
+      }
+
+      break;
+    }
+
+    if (!response || !response.ok) {
+      const errorText = response ? await response.text() : "No response";
+      // Ensure API key is scrubbed if somehow echoed by upstream error text
+      const sanitizedError = errorText.replace(new RegExp(apiKey, "g"), "[REDACTED_API_KEY]");
       return {
         success: false,
-        error: `Gemini API returned status ${response.status}: ${errorText.slice(0, 200)}`,
+        error: `Gemini API returned status ${response?.status || 500}: ${sanitizedError.slice(0, 200)}`,
       };
     }
 
@@ -119,7 +153,6 @@ export async function extractWithGemini(
       };
     }
   } catch (err: unknown) {
-    clearTimeout(timeoutId);
     if (err instanceof Error && err.name === "AbortError") {
       return { success: false, error: "Gemini API request timed out after 30 seconds." };
     }

@@ -20,7 +20,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Fail-closed verification of webhook secret and document payload\nconst headers = $input.item.json.headers || {};\nconst secretHeader = headers['x-webhook-secret'] || headers['X-Webhook-Secret'];\nconst expectedSecret = ($env.N8N_WEBHOOK_SECRET || '').trim();\n\nif (!expectedSecret) {\n  return {\n    isValid: false,\n    statusCode: 500,\n    error: 'Server configuration error: N8N_WEBHOOK_SECRET is not configured on server.'\n  };\n}\n\nif (!secretHeader || secretHeader !== expectedSecret) {\n  return {\n    isValid: false,\n    statusCode: 401,\n    error: 'Unauthorized: Invalid or missing webhook shared secret.'\n  };\n}\n\nconst body = $input.item.json.body || {};\nconst allowedMimes = ['application/pdf', 'image/png', 'image/jpeg'];\nif (\n  !body.fileData || typeof body.fileData !== 'string' ||\n  !body.fileName || typeof body.fileName !== 'string' ||\n  !body.mimeType || !allowedMimes.includes(body.mimeType)\n) {\n  return {\n    isValid: false,\n    statusCode: 400,\n    error: 'Bad Request: Missing or unsupported document payload fields (fileData, fileName, mimeType).'\n  };\n}\n\nreturn {\n  isValid: true,\n  fileData: body.fileData,\n  fileName: body.fileName,\n  mimeType: body.mimeType,\n  idempotencyKey: body.idempotencyKey ? String(body.idempotencyKey).trim() : null\n};"
+        "jsCode": "// Fail-closed verification of webhook secret and document payload\nconst headers = $input.item.json.headers || {};\nconst secretHeader = headers['x-webhook-secret'] || headers['X-Webhook-Secret'];\nconst expectedSecret = ($env.N8N_WEBHOOK_SECRET || '').trim();\n\nif (!expectedSecret) {\n  return {\n    isValid: false,\n    statusCode: 500,\n    error: 'Server configuration error: N8N_WEBHOOK_SECRET is not configured on server.'\n  };\n}\n\nif (!secretHeader || secretHeader !== expectedSecret) {\n  return {\n    isValid: false,\n    statusCode: 401,\n    error: 'Unauthorized: Invalid or missing webhook shared secret.'\n  };\n}\n\nconst body = $input.item.json.body || {};\nconst allowedMimes = ['application/pdf', 'image/png', 'image/jpeg'];\nif (\n  !body.fileData || typeof body.fileData !== 'string' ||\n  !body.fileName || typeof body.fileName !== 'string' ||\n  !body.mimeType || !allowedMimes.includes(body.mimeType)\n) {\n  return {\n    isValid: false,\n    statusCode: 400,\n    error: 'Bad Request: Missing or unsupported document payload fields (fileData, fileName, mimeType).'\n  };\n}\n\n// Enforce 10MB decoded payload bound\nconst base64Len = body.fileData.length;\nconst estimatedDecodedBytes = Math.ceil(base64Len * 0.75);\nif (estimatedDecodedBytes > 10 * 1024 * 1024) {\n  return {\n    isValid: false,\n    statusCode: 400,\n    error: 'Bad Request: File size exceeds the maximum limit of 10 MB.'\n  };\n}\n\n// Validate idempotency key if supplied\nlet idempotencyKey = null;\nif (body.idempotencyKey) {\n  const rawKey = String(body.idempotencyKey).trim();\n  if (rawKey.length > 255 || !/^[a-zA-Z0-9_\\-.:]+$/.test(rawKey)) {\n    return {\n      isValid: false,\n      statusCode: 400,\n      error: 'Bad Request: Invalid idempotency key format or length exceeds 255 characters.'\n    };\n  }\n  idempotencyKey = rawKey;\n}\n\nreturn {\n  isValid: true,\n  fileData: body.fileData,\n  fileName: body.fileName,\n  mimeType: body.mimeType,\n  idempotencyKey\n};"
       },
       "id": "c7a88481-c30d-4001-9a74-95a287235b2a",
       "name": "Validate Request & Secret",
@@ -78,19 +78,106 @@
       "typeVersion": 1.1,
       "position": [
         860,
-        480
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT (\n  SELECT row_to_json(e)\n  FROM \"Expense\" e\n  WHERE NULLIF(trim($1::text), '') IS NOT NULL\n    AND e.\"idempotencyKey\" = trim($1::text)\n  LIMIT 1\n) AS \"existingRecord\";",
+        "options": {
+          "queryReplacement": "={{ [$json.idempotencyKey] }}"
+        }
+      },
+      "id": "e1d2c3b4-5566-47aa-9988-112233445566",
+      "name": "Check Existing Idempotency in Postgres",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        860,
+        280
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "sLBCursBhQmusiPj",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const dbResult = $input.item.json;\nconst prev = $('Check Request Valid').first().json;\n\nconst existing = dbResult ? dbResult.existingRecord : null;\nif (existing && existing.id) {\n  return {\n    isReplay: true,\n    expense: existing\n  };\n}\n\nreturn {\n  isReplay: false,\n  fileData: prev.fileData,\n  fileName: prev.fileName,\n  mimeType: prev.mimeType,\n  idempotencyKey: prev.idempotencyKey\n};"
+      },
+      "id": "d5c4b3a2-6677-48bb-aa99-223344556677",
+      "name": "Evaluate Idempotency Status",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "check-is-replay",
+              "leftValue": "={{ $json.isReplay }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "f4e3d2c1-7788-49cc-bb00-334455667788",
+      "name": "Branch on Idempotency Replay",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1300,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const record = $input.item.json.expense;\nreturn {\n  success: true,\n  expense: record,\n  isReplay: true\n};"
+      },
+      "id": "b2a1c0d9-8899-40dd-cc11-445566778899",
+      "name": "Format Replay Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1520,
+        140
       ]
     },
     {
       "parameters": {
         "method": "POST",
-        "url": "=https://generativelanguage.googleapis.com/v1beta/models/{{ $env.GEMINI_MODEL || 'gemini-flash-latest' }}:generateContent?key={{ $env.GEMINI_API_KEY }}",
+        "url": "=https://generativelanguage.googleapis.com/v1beta/models/{{ ($env.GEMINI_MODEL || 'gemini-flash-lite-latest').replace(/['\"]/g, '').trim() }}:generateContent",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
             {
               "name": "Content-Type",
               "value": "application/json"
+            },
+            {
+              "name": "x-goog-api-key",
+              "value": "={{ $env.GEMINI_API_KEY }}"
             }
           ]
         },
@@ -98,7 +185,7 @@
         "specifyBody": "json",
         "jsonBody": "={\n  \"contents\": [\n    {\n      \"parts\": [\n        {\n          \"inlineData\": {\n            \"mimeType\": \"{{ $json.mimeType }}\",\n            \"data\": \"{{ $json.fileData }}\"\n          }\n        },\n        {\n          \"text\": \"Extract structured financial data from this document. Return ONLY valid JSON matching this schema:\\n{\\n  \\\"expenseDate\\\": \\\"YYYY-MM-DD or null\\\",\\n  \\\"vendor\\\": \\\"string or null\\\",\\n  \\\"invoiceNumber\\\": \\\"string or null\\\",\\n  \\\"description\\\": \\\"string or null\\\",\\n  \\\"amount\\\": \\\"decimal string (e.g. '120.50') or null\\\",\\n  \\\"currency\\\": \\\"3-letter currency code or null\\\",\\n  \\\"taxAmount\\\": \\\"decimal string or null\\\",\\n  \\\"subtotalAmount\\\": \\\"decimal string or null\\\",\\n  \\\"category\\\": \\\"personnel | travel | equipment | software | events | operational | uncategorized\\\",\\n  \\\"confidence\\\": {\\n    \\\"expenseDate\\\": 0.0 to 1.0,\\n    \\\"vendor\\\": 0.0 to 1.0,\\n    \\\"amount\\\": 0.0 to 1.0,\\n    \\\"currency\\\": 0.0 to 1.0\\n  },\\n  \\\"validationIssues\\\": []\\n}\\nRules: Never fabricate values. Use null for missing fields. Do not convert currencies. If subtotal and tax are present, verify they match total.\"\n        }\n      ]\n    }\n  ],\n  \"generationConfig\": {\n    \"responseMimeType\": \"application/json\",\n    \"temperature\": 0.1\n  }\n}",
         "options": {
-          "timeout": 45000
+          "timeout": 40000
         }
       },
       "id": "2bfa7991-872e-41bc-9e11-e402636cf401",
@@ -106,21 +193,25 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        860,
-        280
-      ]
+        1520,
+        360
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput"
     },
     {
       "parameters": {
-        "jsCode": "const response = $input.item.json;\nconst prev = $('Check Request Valid').first().json;\n\nlet rawText = '';\ntry {\n  rawText = response.candidates[0].content.parts[0].text;\n} catch (e) {\n  throw new Error('Gemini API returned an invalid or empty response structure.');\n}\n\nlet data = {};\ntry {\n  data = JSON.parse(rawText.trim());\n} catch (e) {\n  throw new Error('Failed to parse Gemini output as JSON: ' + rawText.slice(0, 100));\n}\n\nconst issues = Array.isArray(data.validationIssues) ? [...data.validationIssues] : [];\n\n// 1. Sanitize & Validate Vendor\nlet vendor = typeof data.vendor === 'string' && data.vendor.trim() ? data.vendor.trim().slice(0, 255) : null;\nif (!vendor) {\n  issues.push({ code: 'MISSING_VENDOR', message: 'Vendor name could not be identified', severity: 'warning', field: 'vendor' });\n}\n\n// 2. Invoice Number\nlet invoiceNumber = typeof data.invoiceNumber === 'string' && data.invoiceNumber.trim() ? data.invoiceNumber.trim().slice(0, 100) : null;\nif (!invoiceNumber) {\n  issues.push({ code: 'MISSING_INVOICE_NUMBER', message: 'Invoice number was not found', severity: 'warning', field: 'invoiceNumber' });\n}\n\n// 3. Description\nlet description = typeof data.description === 'string' && data.description.trim() ? data.description.trim().slice(0, 1000) : null;\n\n// 4. Validate Real Calendar Date (YYYY-MM-DD)\nlet expenseDate = null;\nif (typeof data.expenseDate === 'string' && /^\\d{4}-\\d{2}-\\d{2}$/.test(data.expenseDate.trim())) {\n  const parts = data.expenseDate.trim().split('-');\n  const y = parseInt(parts[0], 10);\n  const m = parseInt(parts[1], 10);\n  const d = parseInt(parts[2], 10);\n  const dateObj = new Date(Date.UTC(y, m - 1, d));\n  if (dateObj.getUTCFullYear() === y && dateObj.getUTCMonth() === m - 1 && dateObj.getUTCDate() === d) {\n    expenseDate = data.expenseDate.trim();\n  } else {\n    issues.push({ code: 'INVALID_CALENDAR_DATE', message: `Date '${data.expenseDate}' is not a valid calendar date`, severity: 'warning', field: 'expenseDate' });\n  }\n} else {\n  issues.push({ code: 'MISSING_OR_INVALID_DATE', message: 'Missing or invalid YYYY-MM-DD date', severity: 'warning', field: 'expenseDate' });\n}\n\n// 5. Amount & Bounds\nlet amount = null;\nlet parsedAmount = null;\nif (data.amount !== null && data.amount !== undefined && String(data.amount).trim() !== '') {\n  let cleanAmount = String(data.amount).trim().replace(/^[\"']|[\"']$/g, '');\n  cleanAmount = cleanAmount.replace(/^(\\$|€|£|¥|US\\$|LE|EGP|AED|SAR)\\s*/i, '');\n  if (/^\\d{1,3}(,\\d{3})+(\\.\\d+)?$/.test(cleanAmount)) {\n    cleanAmount = cleanAmount.replace(/,/g, '');\n  }\n  if (/^-?\\d+(\\.\\d+)?$/.test(cleanAmount)) {\n    parsedAmount = Number(cleanAmount);\n    if (isNaN(parsedAmount)) {\n      issues.push({ code: 'INVALID_AMOUNT', message: 'Total amount is not a valid number', severity: 'error', field: 'amount' });\n    } else if (parsedAmount <= 0) {\n      amount = parsedAmount.toFixed(2);\n      issues.push({ code: parsedAmount === 0 ? 'ZERO_AMOUNT' : 'NEGATIVE_AMOUNT', message: 'Total amount must be strictly positive', severity: 'error', field: 'amount' });\n    } else {\n      amount = parsedAmount.toFixed(2);\n    }\n  } else {\n    issues.push({ code: 'INVALID_AMOUNT', message: 'Total amount format is invalid', severity: 'error', field: 'amount' });\n  }\n} else {\n  issues.push({ code: 'MISSING_AMOUNT', message: 'Total amount was not found', severity: 'error', field: 'amount' });\n}\n\n// 6. Currency Normalization\nconst currencyMap = { '$': 'USD', 'US$': 'USD', '€': 'EUR', '£': 'GBP', '¥': 'JPY', 'EGP': 'EGP', 'LE': 'EGP', 'AED': 'AED', 'SAR': 'SAR', 'CAD': 'CAD', 'AUD': 'AUD', 'CHF': 'CHF' };\nlet currency = null;\nif (typeof data.currency === 'string' && data.currency.trim()) {\n  const rawCurr = data.currency.trim();\n  const mapped = currencyMap[rawCurr] || currencyMap[rawCurr.toUpperCase()];\n  if (mapped) {\n    currency = mapped;\n  } else {\n    const upperCurr = rawCurr.toUpperCase().slice(0, 10);\n    if (/^[A-Z]{3}$/.test(upperCurr)) {\n      currency = upperCurr;\n    } else {\n      currency = upperCurr;\n      issues.push({ code: 'NON_STANDARD_CURRENCY', message: `Currency '${rawCurr}' is non-standard`, severity: 'warning', field: 'currency' });\n    }\n  }\n} else {\n  issues.push({ code: 'MISSING_CURRENCY', message: 'Currency code was not found', severity: 'error', field: 'currency' });\n}\n\n// 7. Tax Amount\nlet taxAmount = null;\nlet parsedTax = null;\nif (data.taxAmount !== null && data.taxAmount !== undefined && String(data.taxAmount).trim() !== '') {\n  let cleanTax = String(data.taxAmount).trim().replace(/^[\"']|[\"']$/g, '');\n  cleanTax = cleanTax.replace(/^(\\$|€|£|¥|US\\$|LE|EGP|AED|SAR)\\s*/i, '');\n  if (/^\\d{1,3}(,\\d{3})+(\\.\\d+)?$/.test(cleanTax)) {\n    cleanTax = cleanTax.replace(/,/g, '');\n  }\n  if (/^-?\\d+(\\.\\d+)?$/.test(cleanTax)) {\n    parsedTax = Number(cleanTax);\n    if (isNaN(parsedTax)) {\n      issues.push({ code: 'INVALID_TAXAMOUNT', message: 'Tax amount is not a valid number', severity: 'error', field: 'taxAmount' });\n    } else if (parsedTax < 0) {\n      taxAmount = parsedTax.toFixed(2);\n      issues.push({ code: 'NEGATIVE_TAXAMOUNT', message: 'Tax amount cannot be negative', severity: 'error', field: 'taxAmount' });\n    } else {\n      taxAmount = parsedTax.toFixed(2);\n      if (parsedAmount !== null && parsedTax > parsedAmount) {\n        issues.push({ code: 'TAX_EXCEEDS_TOTAL', message: 'Tax amount exceeds total amount', severity: 'error', field: 'taxAmount' });\n      }\n    }\n  } else {\n    issues.push({ code: 'INVALID_TAXAMOUNT', message: 'Tax amount format is invalid', severity: 'error', field: 'taxAmount' });\n  }\n}\n\n// 8. Subtotal Amount & Arithmetic Reconciliation\nlet subtotalAmount = null;\nlet parsedSubtotal = null;\nif (data.subtotalAmount !== null && data.subtotalAmount !== undefined && String(data.subtotalAmount).trim() !== '') {\n  let cleanSub = String(data.subtotalAmount).trim().replace(/^[\"']|[\"']$/g, '');\n  cleanSub = cleanSub.replace(/^(\\$|€|£|¥|US\\$|LE|EGP|AED|SAR)\\s*/i, '');\n  if (/^\\d{1,3}(,\\d{3})+(\\.\\d+)?$/.test(cleanSub)) {\n    cleanSub = cleanSub.replace(/,/g, '');\n  }\n  if (/^-?\\d+(\\.\\d+)?$/.test(cleanSub)) {\n    parsedSubtotal = Number(cleanSub);\n    if (isNaN(parsedSubtotal)) {\n      issues.push({ code: 'INVALID_SUBTOTALAMOUNT', message: 'Subtotal amount is not a valid number', severity: 'error', field: 'subtotalAmount' });\n    } else if (parsedSubtotal < 0) {\n      subtotalAmount = parsedSubtotal.toFixed(2);\n      issues.push({ code: 'NEGATIVE_SUBTOTALAMOUNT', message: 'Subtotal amount cannot be negative', severity: 'error', field: 'subtotalAmount' });\n    } else {\n      subtotalAmount = parsedSubtotal.toFixed(2);\n    }\n  } else {\n    issues.push({ code: 'INVALID_SUBTOTALAMOUNT', message: 'Subtotal amount format is invalid', severity: 'error', field: 'subtotalAmount' });\n  }\n}\n\nif (parsedAmount !== null && parsedTax !== null && parsedSubtotal !== null) {\n  const calcTotal = parsedSubtotal + parsedTax;\n  if (Math.abs(calcTotal - parsedAmount) > 0.02) {\n    issues.push({ code: 'ARITHMETIC_MISMATCH', message: `Subtotal (${subtotalAmount}) + Tax (${taxAmount}) = ${calcTotal.toFixed(2)} does not match Total (${amount}) within 0.02 tolerance`, severity: 'warning', field: 'amount' });\n  }\n}\n\n// 9. Category\nconst validCategories = ['personnel', 'travel', 'equipment', 'software', 'events', 'operational', 'uncategorized'];\nlet category = 'uncategorized';\nif (typeof data.category === 'string' && validCategories.includes(data.category.trim().toLowerCase())) {\n  category = data.category.trim().toLowerCase();\n} else {\n  issues.push({ code: 'UNCATEGORIZED_EXPENSE', message: 'Category defaulted to uncategorized', severity: 'warning', field: 'category' });\n}\n\n// 10. Deduplicate issues\nconst seenIssueKeys = new Set();\nconst uniqueIssues = issues.filter(iss => {\n  const key = `${iss.code}_${iss.field || ''}_${iss.message}`;\n  if (seenIssueKeys.has(key)) return false;\n  seenIssueKeys.add(key);\n  return true;\n});\n\n// 11. Initial Status\nlet validationStatus = 'valid';\nconst hasErrors = uniqueIssues.some(i => i.severity === 'error');\nif (hasErrors || !vendor || !amount || !currency || uniqueIssues.length > 0) {\n  validationStatus = 'needs_review';\n}\n\nreturn {\n  expenseDate,\n  vendor,\n  invoiceNumber,\n  description,\n  amount,\n  currency,\n  taxAmount,\n  subtotalAmount,\n  category,\n  validationStatus,\n  validationIssues: JSON.stringify(uniqueIssues),\n  sourceFileName: prev.fileName,\n  idempotencyKey: prev.idempotencyKey\n};"
+        "jsCode": "const response = $input.item.json;\nconst prev = $('Evaluate Idempotency Status').first().json;\n\nlet rawText = '';\ntry {\n  rawText = response.candidates[0].content.parts[0].text;\n} catch (e) {\n  throw new Error('Gemini API returned an invalid or empty response structure.');\n}\n\nlet data = {};\ntry {\n  data = JSON.parse(rawText.trim());\n} catch (e) {\n  throw new Error('Failed to parse Gemini output as JSON: ' + rawText.slice(0, 100));\n}\n\nconst issues = Array.isArray(data.validationIssues) ? [...data.validationIssues] : [];\n\n// 1. Sanitize & Validate Vendor\nlet vendor = typeof data.vendor === 'string' && data.vendor.trim() ? data.vendor.trim().slice(0, 255) : null;\nif (!vendor) {\n  issues.push({ code: 'MISSING_VENDOR', message: 'Vendor name could not be identified', severity: 'warning', field: 'vendor' });\n}\n\n// 2. Invoice Number\nlet invoiceNumber = typeof data.invoiceNumber === 'string' && data.invoiceNumber.trim() ? data.invoiceNumber.trim().slice(0, 100) : null;\nif (!invoiceNumber) {\n  issues.push({ code: 'MISSING_INVOICE_NUMBER', message: 'Invoice number was not found', severity: 'warning', field: 'invoiceNumber' });\n}\n\n// 3. Description\nlet description = typeof data.description === 'string' && data.description.trim() ? data.description.trim().slice(0, 1000) : null;\n\n// 4. Validate Real Calendar Date (YYYY-MM-DD)\nlet expenseDate = null;\nif (typeof data.expenseDate === 'string' && /^\\d{4}-\\d{2}-\\d{2}$/.test(data.expenseDate.trim())) {\n  const parts = data.expenseDate.trim().split('-');\n  const y = parseInt(parts[0], 10);\n  const m = parseInt(parts[1], 10);\n  const d = parseInt(parts[2], 10);\n  const dateObj = new Date(Date.UTC(y, m - 1, d));\n  if (dateObj.getUTCFullYear() === y && dateObj.getUTCMonth() === m - 1 && dateObj.getUTCDate() === d) {\n    expenseDate = data.expenseDate.trim();\n  } else {\n    issues.push({ code: 'INVALID_CALENDAR_DATE', message: `Date '${data.expenseDate}' is not a valid calendar date`, severity: 'warning', field: 'expenseDate' });\n  }\n} else {\n  issues.push({ code: 'MISSING_OR_INVALID_DATE', message: 'Missing or invalid YYYY-MM-DD date', severity: 'warning', field: 'expenseDate' });\n}\n\n// 5. Amount & Bounds\nlet amount = null;\nlet parsedAmount = null;\nif (data.amount !== null && data.amount !== undefined && String(data.amount).trim() !== '') {\n  let cleanAmount = String(data.amount).trim().replace(/^[\"']|[\"']$/g, '');\n  cleanAmount = cleanAmount.replace(/^(\\$|€|£|¥|US\\$|LE|EGP|AED|SAR)\\s*/i, '');\n  if (/^\\d{1,3}(,\\d{3})+(\\.\\d+)?$/.test(cleanAmount)) {\n    cleanAmount = cleanAmount.replace(/,/g, '');\n  }\n  if (/^-?\\d+(\\.\\d+)?$/.test(cleanAmount)) {\n    parsedAmount = Number(cleanAmount);\n    if (isNaN(parsedAmount)) {\n      issues.push({ code: 'INVALID_AMOUNT', message: 'Total amount is not a valid number', severity: 'error', field: 'amount' });\n    } else if (parsedAmount <= 0) {\n      amount = parsedAmount.toFixed(2);\n      issues.push({ code: parsedAmount === 0 ? 'ZERO_AMOUNT' : 'NEGATIVE_AMOUNT', message: 'Total amount must be strictly positive', severity: 'error', field: 'amount' });\n    } else {\n      amount = parsedAmount.toFixed(2);\n    }\n  } else {\n    issues.push({ code: 'INVALID_AMOUNT', message: 'Total amount format is invalid', severity: 'error', field: 'amount' });\n  }\n} else {\n  issues.push({ code: 'MISSING_AMOUNT', message: 'Total amount was not found', severity: 'error', field: 'amount' });\n}\n\n// 6. Currency Normalization\nconst currencyMap = { '$': 'USD', 'US$': 'USD', '€': 'EUR', '£': 'GBP', '¥': 'JPY', 'EGP': 'EGP', 'LE': 'EGP', 'AED': 'AED', 'SAR': 'SAR', 'CAD': 'CAD', 'AUD': 'AUD', 'CHF': 'CHF' };\nlet currency = null;\nif (typeof data.currency === 'string' && data.currency.trim()) {\n  const rawCurr = data.currency.trim();\n  const mapped = currencyMap[rawCurr] || currencyMap[rawCurr.toUpperCase()];\n  if (mapped) {\n    currency = mapped;\n  } else {\n    const upperCurr = rawCurr.toUpperCase().slice(0, 10);\n    if (/^[A-Z]{3}$/.test(upperCurr)) {\n      currency = upperCurr;\n    } else {\n      currency = upperCurr;\n      issues.push({ code: 'NON_STANDARD_CURRENCY', message: `Currency '${rawCurr}' is non-standard`, severity: 'warning', field: 'currency' });\n    }\n  }\n} else {\n  issues.push({ code: 'MISSING_CURRENCY', message: 'Currency code was not found', severity: 'error', field: 'currency' });\n}\n\n// 7. Tax Amount\nlet taxAmount = null;\nlet parsedTax = null;\nif (data.taxAmount !== null && data.taxAmount !== undefined && String(data.taxAmount).trim() !== '') {\n  let cleanTax = String(data.taxAmount).trim().replace(/^[\"']|[\"']$/g, '');\n  cleanTax = cleanTax.replace(/^(\\$|€|£|¥|US\\$|LE|EGP|AED|SAR)\\s*/i, '');\n  if (/^\\d{1,3}(,\\d{3})+(\\.\\d+)?$/.test(cleanTax)) {\n    cleanTax = cleanTax.replace(/,/g, '');\n  }\n  if (/^-?\\d+(\\.\\d+)?$/.test(cleanTax)) {\n    parsedTax = Number(cleanTax);\n    if (isNaN(parsedTax)) {\n      issues.push({ code: 'INVALID_TAXAMOUNT', message: 'Tax amount is not a valid number', severity: 'error', field: 'taxAmount' });\n    } else if (parsedTax < 0) {\n      taxAmount = parsedTax.toFixed(2);\n      issues.push({ code: 'NEGATIVE_TAXAMOUNT', message: 'Tax amount cannot be negative', severity: 'error', field: 'taxAmount' });\n    } else {\n      taxAmount = parsedTax.toFixed(2);\n      if (parsedAmount !== null && parsedTax > parsedAmount) {\n        issues.push({ code: 'TAX_EXCEEDS_TOTAL', message: 'Tax amount exceeds total amount', severity: 'error', field: 'taxAmount' });\n      }\n    }\n  } else {\n    issues.push({ code: 'INVALID_TAXAMOUNT', message: 'Tax amount format is invalid', severity: 'error', field: 'taxAmount' });\n  }\n}\n\n// 8. Subtotal Amount & Arithmetic Reconciliation\nlet subtotalAmount = null;\nlet parsedSubtotal = null;\nif (data.subtotalAmount !== null && data.subtotalAmount !== undefined && String(data.subtotalAmount).trim() !== '') {\n  let cleanSub = String(data.subtotalAmount).trim().replace(/^[\"']|[\"']$/g, '');\n  cleanSub = cleanSub.replace(/^(\\$|€|£|¥|US\\$|LE|EGP|AED|SAR)\\s*/i, '');\n  if (/^\\d{1,3}(,\\d{3})+(\\.\\d+)?$/.test(cleanSub)) {\n    cleanSub = cleanSub.replace(/,/g, '');\n  }\n  if (/^-?\\d+(\\.\\d+)?$/.test(cleanSub)) {\n    parsedSubtotal = Number(cleanSub);\n    if (isNaN(parsedSubtotal)) {\n      issues.push({ code: 'INVALID_SUBTOTALAMOUNT', message: 'Subtotal amount is not a valid number', severity: 'error', field: 'subtotalAmount' });\n    } else if (parsedSubtotal < 0) {\n      subtotalAmount = parsedSubtotal.toFixed(2);\n      issues.push({ code: 'NEGATIVE_SUBTOTALAMOUNT', message: 'Subtotal amount cannot be negative', severity: 'error', field: 'subtotalAmount' });\n    } else {\n      subtotalAmount = parsedSubtotal.toFixed(2);\n    }\n  } else {\n    issues.push({ code: 'INVALID_SUBTOTALAMOUNT', message: 'Subtotal amount format is invalid', severity: 'error', field: 'subtotalAmount' });\n  }\n}\n\nif (parsedAmount !== null && parsedTax !== null && parsedSubtotal !== null) {\n  const calcTotal = parsedSubtotal + parsedTax;\n  if (Math.abs(calcTotal - parsedAmount) > 0.02) {\n    issues.push({ code: 'ARITHMETIC_MISMATCH', message: `Subtotal (${subtotalAmount}) + Tax (${taxAmount}) = ${calcTotal.toFixed(2)} does not match Total (${amount}) within 0.02 tolerance`, severity: 'warning', field: 'amount' });\n  }\n}\n\n// 9. Category\nconst validCategories = ['personnel', 'travel', 'equipment', 'software', 'events', 'operational', 'uncategorized'];\nlet category = 'uncategorized';\nif (typeof data.category === 'string' && validCategories.includes(data.category.trim().toLowerCase())) {\n  category = data.category.trim().toLowerCase();\n} else {\n  issues.push({ code: 'UNCATEGORIZED_EXPENSE', message: 'Category defaulted to uncategorized', severity: 'warning', field: 'category' });\n}\n\n// 10. Deduplicate issues\nconst seenIssueKeys = new Set();\nconst uniqueIssues = issues.filter(iss => {\n  const key = `${iss.code}_${iss.field || ''}_${iss.message}`;\n  if (seenIssueKeys.has(key)) return false;\n  seenIssueKeys.add(key);\n  return true;\n});\n\n// 11. Initial Status\nlet validationStatus = 'valid';\nconst hasErrors = uniqueIssues.some(i => i.severity === 'error');\nif (hasErrors || !vendor || !amount || !currency || uniqueIssues.length > 0) {\n  validationStatus = 'needs_review';\n}\n\nreturn {\n  expenseDate,\n  vendor,\n  invoiceNumber,\n  description,\n  amount,\n  currency,\n  taxAmount,\n  subtotalAmount,\n  category,\n  validationStatus,\n  validationIssues: JSON.stringify(uniqueIssues),\n  sourceFileName: prev.fileName,\n  idempotencyKey: prev.idempotencyKey\n};"
       },
       "id": "e4a2bc19-5e74-4b47-b852-6cf21532bb9a",
       "name": "Validate & Sanitize Extraction",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1100,
-        280
+        1740,
+        360
       ]
     },
     {
@@ -136,15 +227,16 @@
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
       "position": [
-        1340,
-        280
+        1960,
+        360
       ],
       "credentials": {
         "postgres": {
           "id": "sLBCursBhQmusiPj",
           "name": "Postgres account"
         }
-      }
+      },
+      "onError": "continueErrorOutput"
     },
     {
       "parameters": {
@@ -155,8 +247,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1580,
-        280
+        2180,
+        360
       ]
     },
     {
@@ -172,27 +264,28 @@
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
       "position": [
-        1820,
-        280
+        2400,
+        360
       ],
       "credentials": {
         "postgres": {
           "id": "sLBCursBhQmusiPj",
           "name": "Postgres account"
         }
-      }
+      },
+      "onError": "continueErrorOutput"
     },
     {
       "parameters": {
-        "jsCode": "const persistedRecord = $input.item.json;\nif (!persistedRecord || !persistedRecord.id) {\n  throw new Error('Database persistence failed to return a valid expense record.');\n}\n\nreturn {\n  success: true,\n  expense: persistedRecord\n};"
+        "jsCode": "const persistedRecord = $input.item.json;\nif (!persistedRecord || !persistedRecord.id) {\n  throw new Error('Database persistence failed to return a valid expense record.');\n}\n\nreturn {\n  success: true,\n  expense: persistedRecord,\n  isReplay: false\n};"
       },
       "id": "a4d3f5e1-8899-4c12-b912-3f8a9e012345",
       "name": "Format Success Payload",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2060,
-        280
+        2620,
+        360
       ]
     },
     {
@@ -208,8 +301,34 @@
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
       "position": [
-        2300,
+        2840,
         280
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.item.json;\nconst errObj = item?.error || item;\nconst errStatus = Number(errObj?.status || errObj?.statusCode || 0);\nconst rawMessage = String(errObj?.message || errObj?.description || item?.message || '');\n\nconst isRateLimit =\n  errStatus === 429 ||\n  rawMessage.includes('429') ||\n  rawMessage.toLowerCase().includes('too many requests') ||\n  rawMessage.toLowerCase().includes('quota') ||\n  rawMessage.toLowerCase().includes('spacing your requests out');\n\nconst isUnavailable =\n  errStatus === 503 ||\n  rawMessage.includes('503') ||\n  rawMessage.toLowerCase().includes('service unavailable');\n\nlet statusCode = 502;\nlet safeMessage = 'AI extraction service failed to process document.';\n\nif (isRateLimit) {\n  statusCode = 429;\n  safeMessage = 'AI extraction rate limit reached. Please retry shortly.';\n} else if (isUnavailable) {\n  statusCode = 503;\n  safeMessage = 'AI extraction service temporarily unavailable. Please retry shortly.';\n}\n\nreturn {\n  success: false,\n  error: safeMessage,\n  statusCode\n};"
+      },
+      "id": "c1f2e3d4-9988-47bb-aa11-001122334455",
+      "name": "Format Gemini Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1740,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return {\n  success: false,\n  error: 'Database operation failed. Please try again.',\n  statusCode: 500\n};"
+      },
+      "id": "e2f3d4c5-8877-46aa-bb22-112233445566",
+      "name": "Format Database Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2400,
+        520
       ]
     }
   ],
@@ -240,7 +359,7 @@
       "main": [
         [
           {
-            "node": "Gemini Extraction Call",
+            "node": "Check Existing Idempotency in Postgres",
             "type": "main",
             "index": 0
           }
@@ -254,11 +373,76 @@
         ]
       ]
     },
+    "Check Existing Idempotency in Postgres": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Idempotency Status",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format Database Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate Idempotency Status": {
+      "main": [
+        [
+          {
+            "node": "Branch on Idempotency Replay",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Branch on Idempotency Replay": {
+      "main": [
+        [
+          {
+            "node": "Format Replay Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Gemini Extraction Call",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Replay Response": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
     "Gemini Extraction Call": {
       "main": [
         [
           {
             "node": "Validate & Sanitize Extraction",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format Gemini Error",
             "type": "main",
             "index": 0
           }
@@ -284,6 +468,13 @@
             "type": "main",
             "index": 0
           }
+        ],
+        [
+          {
+            "node": "Format Database Error",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     },
@@ -306,6 +497,13 @@
             "type": "main",
             "index": 0
           }
+        ],
+        [
+          {
+            "node": "Format Database Error",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     },
@@ -319,8 +517,31 @@
           }
         ]
       ]
+    },
+    "Format Gemini Error": {
+      "main": [
+        [
+          {
+            "node": "Respond with Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Database Error": {
+      "main": [
+        [
+          {
+            "node": "Respond with Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
+  "active": true,
   "settings": {
     "executionOrder": "v1"
   }

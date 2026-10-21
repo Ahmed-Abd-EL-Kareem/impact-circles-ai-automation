@@ -36,10 +36,61 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // 1. Enforce size bounds BEFORE buffer allocation
+    if (file.size === 0) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Uploaded file is empty (0 bytes).",
+        },
+        { status: 400 }
+      );
+    }
+
+    const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+    if (file.size > MAX_FILE_SIZE) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: `File size exceeds the maximum limit of 10 MB (received ${(file.size / (1024 * 1024)).toFixed(2)} MB).`,
+        },
+        { status: 400 }
+      );
+    }
+
+    // 2. Validate idempotency key if supplied
+    let idempotencyKey =
+      req.headers.get("x-idempotency-key") ||
+      req.headers.get("idempotency-key") ||
+      (formData.get("idempotencyKey") as string | null) ||
+      undefined;
+
+    if (idempotencyKey) {
+      idempotencyKey = idempotencyKey.trim();
+      if (idempotencyKey.length > 255) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: "Invalid idempotency key: maximum allowed length is 255 characters.",
+          },
+          { status: 400 }
+        );
+      }
+      if (!/^[a-zA-Z0-9_\-.:]+$/.test(idempotencyKey)) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: "Invalid idempotency key: only alphanumeric characters, underscores, hyphens, dots, and colons are permitted.",
+          },
+          { status: 400 }
+        );
+      }
+    }
+
+    // 3. Allocate buffer and inspect binary magic bytes
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
 
-    // Validate file bounds and genuine magic bytes
     const validationResult = validateFileBuffer(buffer, file.name);
     if (!validationResult.success) {
       return NextResponse.json(
@@ -53,14 +104,7 @@ export async function POST(req: NextRequest) {
 
     const validatedFile = validationResult.file;
 
-    // Optional request-level idempotency key
-    const idempotencyKey =
-      req.headers.get("x-idempotency-key") ||
-      req.headers.get("idempotency-key") ||
-      (formData.get("idempotencyKey") as string | null) ||
-      undefined;
-
-    // Dispatch to n8n automation workflow (primary persistence owner)
+    // 4. Dispatch to n8n automation workflow (primary persistence owner)
     const result = await dispatchToN8nWorkflow({
       buffer: validatedFile.buffer,
       fileName: validatedFile.fileName,

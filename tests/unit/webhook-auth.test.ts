@@ -71,12 +71,37 @@ function evaluateWebhookRequest(
     };
   }
 
+  // 4. Reject payload exceeding 10MB decoded limit
+  const base64Len = body.fileData.length;
+  const estimatedDecodedBytes = Math.ceil(base64Len * 0.75);
+  if (estimatedDecodedBytes > 10 * 1024 * 1024) {
+    return {
+      isValid: false,
+      statusCode: 400,
+      error: "Bad Request: File size exceeds the maximum limit of 10 MB.",
+    };
+  }
+
+  // 5. Validate idempotency key format if supplied
+  let idempotencyKey: string | null = null;
+  if (body.idempotencyKey) {
+    const rawKey = String(body.idempotencyKey).trim();
+    if (rawKey.length > 255 || !/^[a-zA-Z0-9_\-.:]+$/.test(rawKey)) {
+      return {
+        isValid: false,
+        statusCode: 400,
+        error: "Bad Request: Invalid idempotency key format or length exceeds 255 characters.",
+      };
+    }
+    idempotencyKey = rawKey;
+  }
+
   return {
     isValid: true,
     fileData: body.fileData,
     fileName: body.fileName,
     mimeType: body.mimeType,
-    idempotencyKey: body.idempotencyKey ? String(body.idempotencyKey).trim() : null,
+    idempotencyKey,
   };
 }
 
@@ -171,5 +196,55 @@ describe("Webhook Authentication & Payload Guardrails (Fail-Closed)", () => {
     assert.strictEqual(result.isValid, false);
     assert.strictEqual(result.statusCode, 400);
     assert.match(result.error!, /Missing or unsupported document payload fields/);
+  });
+
+  it("rejects request with 400 when fileData exceeds 10MB decoded size bound", () => {
+    // 14MB base64 string -> ~10.5MB decoded
+    const oversizedBase64 = "A".repeat(14 * 1024 * 1024);
+    const payload: WebhookAuthPayload = {
+      headers: { "x-webhook-secret": validSecret },
+      body: {
+        fileData: oversizedBase64,
+        fileName: "huge.pdf",
+        mimeType: "application/pdf",
+      },
+    };
+    const result = evaluateWebhookRequest(payload, validSecret);
+    assert.strictEqual(result.isValid, false);
+    assert.strictEqual(result.statusCode, 400);
+    assert.match(result.error!, /File size exceeds the maximum limit of 10 MB/);
+  });
+
+  it("rejects request with 400 when idempotency key exceeds 255 characters", () => {
+    const longKey = "k".repeat(256);
+    const payload: WebhookAuthPayload = {
+      headers: { "x-webhook-secret": validSecret },
+      body: {
+        fileData: "base64data",
+        fileName: "test.pdf",
+        mimeType: "application/pdf",
+        idempotencyKey: longKey,
+      },
+    };
+    const result = evaluateWebhookRequest(payload, validSecret);
+    assert.strictEqual(result.isValid, false);
+    assert.strictEqual(result.statusCode, 400);
+    assert.match(result.error!, /Invalid idempotency key format or length/);
+  });
+
+  it("rejects request with 400 when idempotency key contains illegal characters", () => {
+    const payload: WebhookAuthPayload = {
+      headers: { "x-webhook-secret": validSecret },
+      body: {
+        fileData: "base64data",
+        fileName: "test.pdf",
+        mimeType: "application/pdf",
+        idempotencyKey: "key with spaces; DROP TABLE Expense;--",
+      },
+    };
+    const result = evaluateWebhookRequest(payload, validSecret);
+    assert.strictEqual(result.isValid, false);
+    assert.strictEqual(result.statusCode, 400);
+    assert.match(result.error!, /Invalid idempotency key format or length/);
   });
 });

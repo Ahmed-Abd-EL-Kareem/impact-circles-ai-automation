@@ -16,12 +16,15 @@ A production-grade vertical slice for intelligent financial document ingestion, 
       ▼
 [n8n Automation Pipeline (Port 5678)]
       ├─ 1. Webhook Trigger (`POST /webhook/impact-circles-ai-automation`)
-      ├─ 2. Validate Request & Shared Secret (`x-webhook-secret`)
-      ├─ 3. Multimodal Extraction via Google Gemini (`gemini-flash-latest` / `gemini-3.1-flash-lite`)
-      ├─ 4. Server-side Extraction Schema & Arithmetic Sanity Validation ($0.02 tolerance)
-      ├─ 5. Duplicate Detection Query against Neon PostgreSQL (Parameterized $1..$N SQL)
-      ├─ 6. Single-Ownership Persistence with Idempotency (INSERT ... ON CONFLICT DO UPDATE)
-      └─ 7. Respond to Webhook with 201 Created + Persisted Record
+      ├─ 2. Validate Request & Shared Secret (`x-webhook-secret` - fails closed on error)
+      ├─ 3. Early Idempotency Fast-Path: Checks Neon Postgres for `idempotencyKey`
+      │      └─ If match exists: returns persisted record immediately in ~270ms (bypassing AI call)
+      ├─ 4. Multimodal Extraction via Google Gemini API (`x-goog-api-key` header)
+      ├─ 5. Server-side Extraction Schema & Arithmetic Sanity Validation ($0.02 tolerance)
+      ├─ 6. Duplicate Detection Query against Neon PostgreSQL (Parameterized $1..$N SQL)
+      ├─ 7. Single-Ownership Persistence with Idempotency (INSERT ... ON CONFLICT DO UPDATE)
+      ├─ 8. Respond to Webhook with 201 Created + Persisted Record
+      └─ 9. Unified Error Handler: routes Gemini/DB/validation errors to safe HTTP statuses
       │
       ▼
 [Next.js Client UI]
@@ -155,6 +158,13 @@ n8n will start and be accessible at [http://localhost:5678](http://localhost:567
 
 ## 7. How to Import and Configure the Finance Workflow in n8n
 
+### Option A: Automatic Sync (Recommended)
+If n8n is running locally with SQLite storage (`~/.n8n/database.sqlite`), you can sync the workflow definition instantly:
+```powershell
+npm run workflow:sync
+```
+
+### Option B: Manual UI Import
 1. Open your browser and navigate to `http://localhost:5678`.
 2. In the left navigation, click **Workflows** → **Import from File**.
 3. Select the file:
@@ -168,7 +178,7 @@ n8n will start and be accessible at [http://localhost:5678](http://localhost:567
    - Password: Your Neon database password.
    - Port: `5432`
    - SSL: `Require` / `Verify-Full`
-5. Connect both Postgres nodes in the workflow (`Check Duplicate in Neon Postgres` and `Persist Expense into Neon Postgres`) to your credential.
+5. Connect all Postgres nodes in the workflow (`Check Existing Idempotency in Postgres`, `Check Duplicate in Neon Postgres`, and `Persist Expense into Neon Postgres`) to your credential.
 6. Ensure the workflow is **Activated** (toggle switch in the top right to **Active**).
 
 ---
@@ -176,7 +186,7 @@ n8n will start and be accessible at [http://localhost:5678](http://localhost:567
 ## 8. Testing & Quality Verification
 
 ### Run Unit Tests
-A comprehensive test suite of 50 unit tests across 7 suites:
+A comprehensive test suite of 55 unit tests across 7 suites:
 
 ```powershell
 npm test

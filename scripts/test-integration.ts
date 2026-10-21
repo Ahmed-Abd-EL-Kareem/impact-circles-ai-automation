@@ -45,6 +45,9 @@ async function runMasterIntegration() {
   console.log(">>> RUNNING SUITE 1: Direct Pipeline Integration Test <<<\n");
   await runSubScript(directScript);
 
+  console.log("\nWaiting 10 seconds for Gemini API rate limits to settle before running E2E suite...\n");
+  await new Promise((r) => setTimeout(r, 10000));
+
   console.log("\n>>> RUNNING SUITE 2: True Production n8n End-to-End Test <<<\n");
   await runSubScript(e2eScript);
 

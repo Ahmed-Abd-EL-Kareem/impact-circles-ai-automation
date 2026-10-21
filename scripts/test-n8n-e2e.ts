@@ -6,77 +6,73 @@ import { prisma } from "../src/lib/db.ts";
 dotenv.config();
 
 /**
- * True Production n8n End-to-End Test
- * Tests the complete live orchestration path:
- * Client Request -> n8n Webhook -> Fail-closed Secret Auth -> Gemini AI Extraction
- * -> Server Validation -> Neon Postgres Parameterized Queries -> Idempotency & Duplicate Assertions
- * -> Webhook Response with Persisted Record ID.
+ * True Production n8n End-to-End Test Suite
+ *
+ * Requirements:
+ * - n8n must be running on port 5678 with workflow active.
+ * - If n8n or credentials are unavailable, this test exits non-zero (NO FALSE SUCCESS).
+ * - Tests full path: Webhook -> Auth -> Early Idempotency -> Gemini -> Neon Postgres -> Response.
+ * - Asserts fail-closed auth, payload validation, atomic idempotency replay, and duplicate detection.
+ * - Cleans up only test-created records in finally block.
  */
-async function runN8nE2ETest() {
+async function runProductionN8nE2ETest() {
   console.log("=========================================================");
   console.log("Impact Circles - Production n8n End-to-End Test");
   console.log("=========================================================\n");
 
-  const webhookUrl =
-    process.env.N8N_WEBHOOK_URL || "http://localhost:5678/webhook/impact-circles-ai-automation";
-  const webhookSecret = process.env.N8N_WEBHOOK_SECRET;
   const baseUrl = process.env.N8N_BASE_URL || "http://localhost:5678";
+  const webhookUrl =
+    process.env.N8N_WEBHOOK_URL ||
+    `${baseUrl}/webhook/impact-circles-ai-automation`;
+  const webhookSecret = process.env.N8N_WEBHOOK_SECRET;
 
-  // 1. Check prerequisites
-  console.log("1. Checking service prerequisites...");
-
-  if (!process.env.DATABASE_URL) {
-    console.error("❌ BLOCKED: DATABASE_URL is not configured.");
-    process.exit(1);
-  }
-  if (!process.env.GEMINI_API_KEY) {
-    console.error("❌ BLOCKED: GEMINI_API_KEY is not configured.");
-    process.exit(1);
-  }
   if (!webhookSecret) {
-    console.error("❌ BLOCKED: N8N_WEBHOOK_SECRET is not configured in environment.");
+    console.error("❌ BLOCKED: N8N_WEBHOOK_SECRET is not configured in .env.");
     process.exit(1);
   }
-
-  // Check n8n health
-  try {
-    const probeUrls = [
-      `${baseUrl}/healthz`,
-      baseUrl.includes("localhost") ? baseUrl.replace("localhost", "127.0.0.1") + "/healthz" : null,
-    ].filter(Boolean) as string[];
-
-    let online = false;
-    for (const url of probeUrls) {
-      try {
-        const healthRes = await fetch(url, {
-          signal: AbortSignal.timeout(8000),
-        });
-        if (healthRes.ok) {
-          online = true;
-          break;
-        }
-      } catch {
-        // try next probe url
-      }
-    }
-
-    if (!online) {
-      throw new Error(`n8n health check failed on ${baseUrl}`);
-    }
-    console.log("   ✓ n8n server is online and healthy.\n");
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error(`❌ BLOCKED: n8n server is not reachable at ${baseUrl} (${msg}).`);
-    console.error("   To run this live test, start n8n with: 'npx n8n'\n");
+  const verifiedWebhookSecret: string = webhookSecret;
+  if (!process.env.DATABASE_URL) {
+    console.error("❌ BLOCKED: DATABASE_URL is not configured in .env.");
     process.exit(1);
   }
 
   const createdIds: string[] = [];
 
   try {
-    // 2. Load fixture
+    // 1. Check prerequisites
+    console.log("1. Checking service prerequisites...");
+    let n8nHealthy = false;
+    const probeUrls = [baseUrl, "http://127.0.0.1:5678"];
+
+    for (const probeUrl of probeUrls) {
+      try {
+        const healthRes = await fetch(`${probeUrl}/healthz`, {
+          signal: AbortSignal.timeout(8000),
+        });
+        if (healthRes.ok) {
+          n8nHealthy = true;
+          break;
+        }
+      } catch {
+        // try next
+      }
+    }
+
+    if (!n8nHealthy) {
+      console.error(
+        `❌ BLOCKED: n8n server is unreachable on ${baseUrl}. Start n8n before running this test.`
+      );
+      process.exit(1);
+    }
+    console.log("   ✓ n8n server is online and healthy.\n");
+
+    // 2. Load test fixture
     console.log("2. Loading test invoice fixture...");
-    const invoicePath = path.join(process.cwd(), "test-fixtures", "fictional-invoice.pdf");
+    const invoicePath = path.join(
+      process.cwd(),
+      "test-fixtures",
+      "fictional-invoice.pdf"
+    );
     if (!fs.existsSync(invoicePath)) {
       throw new Error(`Fixture not found at: ${invoicePath}`);
     }
@@ -112,7 +108,7 @@ async function runN8nE2ETest() {
     console.log("   ✓ SUCCESS: Unauthorized request was rejected with HTTP 401!\n");
 
     // 4. Test Malformed Payload Rejection
-    console.log("4. Testing malformed payload rejection...");
+    console.log("4. Testing malformed payload rejection (unsupported mimeType)...");
     const badPayloadRes = await fetch(webhookUrl, {
       method: "POST",
       headers: {
@@ -122,7 +118,7 @@ async function runN8nE2ETest() {
       body: JSON.stringify({
         fileData: "some-data",
         fileName: "bad.exe",
-        mimeType: "application/x-msdownload", // unsupported
+        mimeType: "application/x-msdownload",
       }),
       signal: AbortSignal.timeout(10000),
     });
@@ -138,6 +134,41 @@ async function runN8nE2ETest() {
     }
     console.log("   ✓ SUCCESS: Malformed payload was rejected with HTTP 400!\n");
 
+    // Helper to gracefully retry on transient upstream AI bursts (429 / 503 / 502)
+    async function postWebhookWithRetry(
+      payload: Record<string, unknown>,
+      stepName: string,
+      maxAttempts = 5
+    ): Promise<Response> {
+      let attempt = 0;
+      while (attempt < maxAttempts) {
+        attempt++;
+        const res = await fetch(webhookUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-webhook-secret": verifiedWebhookSecret,
+          },
+          body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(90000),
+        });
+
+        if (res.status === 201) {
+          return res;
+        }
+
+        if ((res.status === 429 || res.status === 502 || res.status === 503) && attempt < maxAttempts) {
+          const waitTime = attempt * 5000;
+          console.log(`   [${stepName}] Got HTTP ${res.status}. Waiting ${waitTime}ms for upstream AI quota/burst to settle (attempt ${attempt}/${maxAttempts})...`);
+          await new Promise((r) => setTimeout(r, waitTime));
+          continue;
+        }
+
+        return res;
+      }
+      throw new Error(`Exceeded max retry attempts for ${stepName}`);
+    }
+
     // 5. Test Live Ingestion & Persistence via n8n
     const testIdempotencyKey = `e2e-n8n-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     console.log("5. Testing valid document ingestion through n8n workflow...");
@@ -145,20 +176,12 @@ async function runN8nE2ETest() {
 
     const initialDbCount = await prisma.expense.count();
 
-    const successRes = await fetch(webhookUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-webhook-secret": webhookSecret,
-      },
-      body: JSON.stringify({
-        fileData: base64Data,
-        fileName: "fictional-invoice.pdf",
-        mimeType: "application/pdf",
-        idempotencyKey: testIdempotencyKey,
-      }),
-      signal: AbortSignal.timeout(45000),
-    });
+    const successRes = await postWebhookWithRetry({
+      fileData: base64Data,
+      fileName: "fictional-invoice.pdf",
+      mimeType: "application/pdf",
+      idempotencyKey: testIdempotencyKey,
+    }, "Step 5 Document Ingestion");
 
     if (successRes.status !== 201) {
       const errText = await successRes.text();
@@ -183,8 +206,9 @@ async function runN8nE2ETest() {
     console.log(`     - Tax: ${firstExpense.taxAmount}`);
     console.log(`     - Status: ${firstExpense.validationStatus}\n`);
 
-    // 6. Test Request-Level Idempotency Replay through n8n
-    console.log("6. Testing n8n request idempotency replay with same key...");
+    // 6. Test Early Request-Level Idempotency Replay through n8n
+    console.log("6. Testing n8n request idempotency replay with same key (early fast path)...");
+    const replayStartTime = Date.now();
     const replayRes = await fetch(webhookUrl, {
       method: "POST",
       headers: {
@@ -199,8 +223,9 @@ async function runN8nE2ETest() {
       }),
       signal: AbortSignal.timeout(45000),
     });
+    const replayDurationMs = Date.now() - replayStartTime;
 
-    if (replayRes.status !== 201) {
+    if (replayRes.status !== 200 && replayRes.status !== 201) {
       throw new Error(`Replay request failed with HTTP ${replayRes.status}`);
     }
 
@@ -217,13 +242,11 @@ async function runN8nE2ETest() {
         `ASSERTION FAILED: Database record count increased on replay from ${initialDbCount + 1} to ${dbCountAfterReplay}`
       );
     }
-    console.log("   ✓ SUCCESS: Replay returned identical record without duplicate insertion!\n");
+    console.log(`   ✓ SUCCESS: Replay returned identical record in ${replayDurationMs}ms without duplicate insertion!\n`);
 
-    // 7. Test Business Duplicate Candidate Detection through n8n
-    console.log("7. Testing business duplicate detection (different key, duplicate invoice)...");
-    const dupKey = `e2e-dup-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-
-    const dupRes = await fetch(webhookUrl, {
+    // 7. Test Altered Payload Replay (Tampering Immunity)
+    console.log("7. Testing replay with altered payload (tampering immunity)...");
+    const alteredRes = await fetch(webhookUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -231,15 +254,41 @@ async function runN8nE2ETest() {
       },
       body: JSON.stringify({
         fileData: base64Data,
-        fileName: "fictional-duplicate-invoice.pdf",
+        fileName: "altered-tampered-name.pdf",
         mimeType: "application/pdf",
-        idempotencyKey: dupKey,
+        idempotencyKey: testIdempotencyKey, // same key
       }),
       signal: AbortSignal.timeout(45000),
     });
 
+    const alteredBody = await alteredRes.json();
+    if (alteredBody.expense.id !== firstExpense.id) {
+      throw new Error(`Tampering replay returned different ID: ${alteredBody.expense.id}`);
+    }
+    // Verify in database that original values were NOT overwritten
+    const checkDbRecord = await prisma.expense.findUnique({
+      where: { id: firstExpense.id },
+    });
+    if (checkDbRecord?.sourceFileName !== "fictional-invoice.pdf") {
+      throw new Error(`Database record was mutated on altered replay: ${checkDbRecord?.sourceFileName}`);
+    }
+    console.log("   ✓ SUCCESS: Altered replay preserved original record without overwriting!\n");
+
+    // 8. Test Business Duplicate Candidate Detection through n8n
+    console.log("8. Testing business duplicate detection (different key, duplicate invoice)...");
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    const dupKey = `e2e-dup-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+
+    const dupRes = await postWebhookWithRetry({
+      fileData: base64Data,
+      fileName: "fictional-duplicate-invoice.pdf",
+      mimeType: "application/pdf",
+      idempotencyKey: dupKey,
+    }, "Step 8 Business Duplicate");
+
     if (dupRes.status !== 201) {
-      throw new Error(`Duplicate submission failed with HTTP ${dupRes.status}`);
+      const errText = await dupRes.text();
+      throw new Error(`Duplicate submission failed with HTTP ${dupRes.status}: ${errText}`);
     }
 
     const dupBody = await dupRes.json();
@@ -252,20 +301,35 @@ async function runN8nE2ETest() {
 
     if (dupExpense.validationStatus !== "duplicate_suspected") {
       throw new Error(
-        `ASSERTION FAILED: Expected validationStatus 'duplicate_suspected', got '${dupExpense.validationStatus}'`
+        `ASSERTION FAILED: Expected validationStatus='duplicate_suspected', got '${dupExpense.validationStatus}'`
       );
+    }
+
+    const issues = typeof dupExpense.validationIssues === "string"
+      ? JSON.parse(dupExpense.validationIssues)
+      : dupExpense.validationIssues || [];
+    const hasDupIssue = issues.some(
+      (i: { code: string }) => i.code === "DUPLICATE_CANDIDATE"
+    );
+    if (!hasDupIssue) {
+      throw new Error(`ASSERTION FAILED: Missing DUPLICATE_CANDIDATE issue in validationIssues.`);
     }
     console.log("   ✓ SUCCESS: Business duplicate correctly detected and flagged duplicate_suspected!\n");
 
-    // 8. Test Multi-Currency Financial Summary
-    console.log("8. Verifying multi-currency summary in Neon PostgreSQL...");
-    const currencySummary = await prisma.expense.groupBy({
+    // 9. Verify Multi-Currency Summary in Neon PostgreSQL
+    console.log("9. Verifying multi-currency summary in Neon PostgreSQL...");
+    const summary = await prisma.expense.groupBy({
       by: ["currency"],
       _count: { id: true },
       _sum: { amount: true },
-      where: { currency: { not: null } },
+      where: {
+        currency: { not: null },
+        amount: { gt: 0 },
+        validationStatus: { not: "failed" },
+      },
     });
-    for (const group of currencySummary) {
+
+    for (const group of summary) {
       console.log(`     - ${group.currency}: count=${group._count.id}, total=${group._sum.amount}`);
     }
 
@@ -275,16 +339,16 @@ async function runN8nE2ETest() {
   } finally {
     if (createdIds.length > 0) {
       console.log(`Cleaning up ${createdIds.length} E2E test record(s) from Neon PostgreSQL...`);
-      const deleteResult = await prisma.expense.deleteMany({
+      await prisma.expense.deleteMany({
         where: { id: { in: createdIds } },
       });
-      console.log(`✓ Cleaned up ${deleteResult.count} test record(s).`);
+      console.log(`✓ Cleaned up ${createdIds.length} test record(s).`);
     }
     await prisma.$disconnect();
   }
 }
 
-runN8nE2ETest().catch((err) => {
-  console.error("\n❌ Production n8n E2E test failed:", err);
+runProductionN8nE2ETest().catch((err) => {
+  console.error("❌ Production n8n E2E test failed:", err);
   process.exit(1);
 });

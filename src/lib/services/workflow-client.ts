@@ -47,7 +47,7 @@ export async function dispatchToN8nWorkflow(
   };
 
   const controller = new AbortController();
-  const timeoutMs = 45000; // 45s timeout for multimodal AI pipeline
+  const timeoutMs = 90000; // 90s timeout coordinated with n8n workflow execution bounds
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
