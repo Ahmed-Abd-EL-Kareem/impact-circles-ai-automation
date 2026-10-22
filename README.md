@@ -19,7 +19,7 @@ A full-stack vertical slice demonstration for intelligent financial document ing
     │                                 ▼
     │                          [Expense Ledger, Category Breakdown & CSV Export]
     │
-    └─► Prompt / Generate   ──► [POST /api/content/generate]
+    └─► Prompt / Generate   ──► [POST /api/content]
                                       │ (Drafts 3 channels: Website CMS, LinkedIn, Newsletter)
                                       ▼
                                 [Human Review & Passcode Guard]
@@ -45,6 +45,8 @@ A full-stack vertical slice demonstration for intelligent financial document ing
 ---
 
 ## Quick Start
+
+Requires Node.js 22+.
 
 ### 1. Clone & Install Dependencies
 
@@ -82,9 +84,11 @@ SANDBOX_FAIL_CHANNELS=""
 # Optional Reviewer Passcode (guards PATCH, approve, and publish routes; skipped if unset)
 REVIEWER_PASSCODE=""
 
-# Optional n8n Webhook (if unset, app automatically uses built-in direct pipeline fallback)
-N8N_WEBHOOK_URL="http://localhost:5678/webhook/impact-circles-ai-automation"
-N8N_WEBHOOK_SECRET="your-webhook-shared-secret"
+# n8n Automation (Optional)
+# Uncomment only if you run n8n; otherwise the app uses the built-in pipeline.
+# N8N_BASE_URL="http://localhost:5678"
+# N8N_WEBHOOK_URL="http://localhost:5678/webhook/impact-circles-ai-automation"
+# N8N_WEBHOOK_SECRET="your-webhook-shared-secret"
 ```
 
 ### 3. Initialize Database & Run
@@ -102,7 +106,7 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 ## 5-Minute Demo Script
 
 ### Part 1: Finance Ingestion & Validation
-1. **Upload Valid Invoice**: On the Finance tab, drag and drop `test-fixtures/fictional-invoice-usd.pdf`. Observe Gemini extraction, automatic status `auto_approved`, subtotal/tax reconciliation, and ledger display.
+1. **Upload Valid Invoice**: On the Finance tab, drag and drop `test-fixtures/fictional-invoice.pdf`. Observe Gemini extraction, automatic status `auto_approved`, subtotal/tax reconciliation, and ledger display.
 2. **Duplicate Detection**: Upload the same file again. The system detects matching vendor, invoice number, amount, and currency, assigning status `duplicate_suspected` without corrupting totals.
 3. **Missing Fields**: Upload `test-fixtures/fictional-missing-fields-invoice.pdf`. The system assigns status `needs_review` and flags missing fields.
 4. **Category Breakdown**: View the breakdown table grouped strictly by category and currency (zero cross-currency addition).
@@ -135,13 +139,13 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 - **Passcode Authentication**: Uses constant-time header comparison (`x-reviewer-passcode`) for simple reviewer authorization rather than a full multi-tenant OAuth/OIDC identity system.
 - **Single-Tenant Schema**: Designed as a focused assessment vertical slice rather than a multi-organization SaaS architecture.
 - **API Rate Limits**: Subject to Google Gemini API quota limits (default configured model: `gemini-flash-latest`).
-- **Automation Runner**: n8n provides external visual orchestration; if n8n is offline or unconfigured, the app falls back to an internal direct pipeline (`src/lib/services/pipeline.ts`).
+- **Automation Runner**: If N8N_WEBHOOK_URL is unset, the app uses the built-in direct pipeline.
 
 ---
 
 ## Sample Outputs Directory (`sample-outputs/`)
 
-Generated using fictional test fixtures via `npm run export:samples`:
+Sample records modeled on the test fixtures, produced by npm run export:samples:
 
 - `sample-outputs/expenses.csv` — RFC 4180 CSV export of ingested invoices.
 - `sample-outputs/finance-summary.json` — Structured totals grouped by currency and category.

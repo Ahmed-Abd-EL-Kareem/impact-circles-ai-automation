@@ -187,7 +187,8 @@ export async function PATCH(req: NextRequest, { params }: RouteParams) {
     const wasApprovedOrPublished =
       existing.status === "approved" ||
       existing.status === "published" ||
-      existing.status === "partially_published";
+      existing.status === "partially_published" ||
+      existing.status === "failed";
 
     const approvalReset = (contentChanged || channelsChanged) && wasApprovedOrPublished;
 

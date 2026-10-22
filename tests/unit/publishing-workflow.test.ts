@@ -326,7 +326,13 @@ describe("Phase 1: Real Sandbox Publishing Invariants & Workflow", () => {
     let nextStatus = existingPost.status;
     let nextApprovedAt: Date | null = existingPost.approvedAt;
 
-    if (contentChanged && existingPost.status === "approved") {
+    const wasApprovedOrPublished =
+      existingPost.status === "approved" ||
+      existingPost.status === "published" ||
+      existingPost.status === "partially_published" ||
+      existingPost.status === "failed";
+
+    if (contentChanged && wasApprovedOrPublished) {
       nextStatus = "in_review";
       nextApprovedAt = null;
     }
@@ -338,6 +344,27 @@ describe("Phase 1: Real Sandbox Publishing Invariants & Workflow", () => {
     // Publication logic checks
     const canPublish = nextStatus === "approved" && nextApprovedAt !== null;
     assert.strictEqual(canPublish, false);
+
+    // Also verify for a 'failed' post with prior approvedAt: editing resets status and approval
+    const failedPost = {
+      status: "failed",
+      approvedAt: new Date(),
+      websiteContent: "Failed content",
+    };
+    const failedWasApproved =
+      failedPost.status === "approved" ||
+      failedPost.status === "published" ||
+      failedPost.status === "partially_published" ||
+      failedPost.status === "failed";
+    assert.strictEqual(failedWasApproved, true);
+    let failedNextStatus = failedPost.status;
+    let failedNextApprovedAt: Date | null = failedPost.approvedAt;
+    if (contentChanged && failedWasApproved) {
+      failedNextStatus = "in_review";
+      failedNextApprovedAt = null;
+    }
+    assert.strictEqual(failedNextStatus, "in_review");
+    assert.strictEqual(failedNextApprovedAt, null);
   });
 
   it("enforces channel re-approval invariant: changing targetChannels on an approved post resets status to 'in_review' and clears approvedAt", async () => {
@@ -359,7 +386,8 @@ describe("Phase 1: Real Sandbox Publishing Invariants & Workflow", () => {
     const wasApprovedOrPublished =
       mockPost.status === "approved" ||
       mockPost.status === "published" ||
-      mockPost.status === "partially_published";
+      mockPost.status === "partially_published" ||
+      mockPost.status === "failed";
 
     const approvalReset = channelsChanged && wasApprovedOrPublished;
 
