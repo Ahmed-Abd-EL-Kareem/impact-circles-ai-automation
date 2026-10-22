@@ -2,6 +2,8 @@
 
 A full-stack vertical slice demonstration for intelligent financial document ingestion, structured multimodal data extraction, duplicate detection, and human-in-the-loop multi-channel content generation with sandbox publishing. Built for the Impact Circles AI Agents & Automation Developer assessment.
 
+📄 **[Download Technical Documentation (PDF)](./Technical_Documentation.pdf)** — Comprehensive explanation of the architecture, tools, integrations, limitations, and workflow reproduction instructions.
+
 ---
 
 ## Architecture & Processing Flow
@@ -84,10 +86,19 @@ SANDBOX_FAIL_CHANNELS=""
 # Optional Reviewer Passcode (guards PATCH, approve, and publish routes; skipped if unset)
 REVIEWER_PASSCODE=""
 
-# n8n Automation (Optional)
-# Uncomment only if you run n8n; otherwise the app uses the built-in pipeline.
+# n8n Automation (Optional — Local or Cloud)
+# Uncomment only if you run n8n; otherwise the app uses the built-in direct pipeline.
+#
+# Option A — Local n8n (http://localhost:5678):
 # N8N_BASE_URL="http://localhost:5678"
 # N8N_WEBHOOK_URL="http://localhost:5678/webhook/impact-circles-ai-automation"
+# N8N_CONTENT_WEBHOOK_URL="http://localhost:5678/webhook/impact-circles-content-publishing"
+#
+# Option B — n8n Cloud (https://your-instance.app.n8n.cloud):
+# N8N_BASE_URL="https://your-instance.app.n8n.cloud"
+# N8N_WEBHOOK_URL="https://your-instance.app.n8n.cloud/webhook/impact-circles-ai-automation"
+# N8N_CONTENT_WEBHOOK_URL="https://your-instance.app.n8n.cloud/webhook/impact-circles-content-publishing"
+#
 # N8N_WEBHOOK_SECRET="your-webhook-shared-secret"
 ```
 
@@ -100,6 +111,34 @@ npm run dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000) in your browser.
+
+### 4. (Optional) Run with n8n — Local or n8n Cloud
+
+The application functions completely out-of-the-box using the built-in direct pipeline without n8n. If you want visual orchestration:
+
+#### Option A: Run Local n8n
+1. Install and start n8n locally via npm or Docker:
+   ```bash
+   npx n8n
+   # or with docker:
+   # docker run -it --rm --name n8n -p 5678:5678 -v ~/.n8n:/home/node/.n8n n8nio/n8n
+   ```
+2. Open `http://localhost:5678` in your browser.
+3. In `.env`, uncomment the local n8n URLs (`http://localhost:5678/...`).
+
+#### Option B: Connect to n8n Cloud
+1. Create or log in to your [n8n Cloud](https://n8n.io/cloud/) workspace (e.g. `https://your-instance.app.n8n.cloud`).
+2. In `.env`, set `N8N_BASE_URL`, `N8N_WEBHOOK_URL`, and `N8N_CONTENT_WEBHOOK_URL` to your cloud endpoints.
+
+#### Import & Activate Workflows (Local or Cloud)
+1. In n8n, navigate to **Workflows** → **Import from File**:
+   - Import `n8n/workflows/finance-processing.json`
+   - Import `n8n/workflows/content-publishing.json`
+2. Configure Credentials:
+   - **Neon Postgres**: Create a Postgres credential pointing to your Neon database URL (Host, Database, User, Password, Port 5432, SSL `require`).
+   - **Google Gemini API**: Create a Gemini API credential using your `GEMINI_API_KEY`.
+3. Set `N8N_WEBHOOK_SECRET` in your n8n environment variables to match your `.env`.
+4. Toggle both workflows to **Active**. Next.js will automatically delegate tasks to n8n, falling back to the direct pipeline if n8n is ever offline.
 
 ---
 

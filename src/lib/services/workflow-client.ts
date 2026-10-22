@@ -223,7 +223,7 @@ export type ContentWebhookParams =
   | ContentPublishingWebhookParams;
 
 export type ContentWorkflowResult =
-  | { success: true; post?: unknown; results?: unknown; data?: unknown }
+  | { success: true; post?: unknown; results?: unknown; data?: Record<string, unknown> }
   | { success: false; error: string; statusCode?: number };
 
 /**
@@ -345,7 +345,7 @@ export async function dispatchContentToN8nWorkflow(
     if (!data || !data.success) {
       return {
         success: false,
-        error: data?.error || "n8n content workflow returned an unsuccessful response.",
+        error: typeof data?.error === "string" ? data.error : "n8n content workflow returned an unsuccessful response.",
         statusCode: 502,
       };
     }
