@@ -68,34 +68,81 @@ export async function publishContentPost(
     };
   }
 
-  // Parse target channels
-  let channelsToPublish: PublishChannel[] = [];
-  if (options?.forcedChannels && options.forcedChannels.length > 0) {
-    channelsToPublish = options.forcedChannels;
-  } else if (Array.isArray(post.targetChannels)) {
-    channelsToPublish = post.targetChannels as PublishChannel[];
+  // Parse saved/approved target channels
+  let approvedChannels: PublishChannel[] = [];
+  if (Array.isArray(post.targetChannels)) {
+    approvedChannels = post.targetChannels as PublishChannel[];
   } else if (typeof post.targetChannels === "string") {
     try {
-      channelsToPublish = JSON.parse(post.targetChannels) as PublishChannel[];
+      const parsed = JSON.parse(post.targetChannels);
+      if (Array.isArray(parsed)) {
+        approvedChannels = parsed as PublishChannel[];
+      }
     } catch {
-      channelsToPublish = ["website", "linkedin", "newsletter"];
+      approvedChannels = [];
     }
   }
 
-  if (channelsToPublish.length === 0) {
-    channelsToPublish = ["website", "linkedin", "newsletter"];
+  if (approvedChannels.length === 0) {
+    approvedChannels = ["website", "linkedin", "newsletter"];
   }
 
-  // Validate that all channels are supported
-  for (const ch of channelsToPublish) {
-    if (!SUPPORTED_CHANNELS.includes(ch)) {
+  let channelsToPublish: PublishChannel[] = [];
+
+  if (options?.forcedChannels !== undefined) {
+    if (!Array.isArray(options.forcedChannels) || options.forcedChannels.length === 0) {
       return {
         success: false,
         post: formatPostRecord(post),
         results: [],
-        error: `Invalid channel '${String(ch)}'. Supported channels are: website, linkedin, newsletter.`,
+        error: "Validation error: 'channels' must be a non-empty array of supported channels.",
       };
     }
+
+    // 1. Validate that all requested channels are supported channel names
+    for (const ch of options.forcedChannels) {
+      if (!SUPPORTED_CHANNELS.includes(ch)) {
+        return {
+          success: false,
+          post: formatPostRecord(post),
+          results: [],
+          error: `Invalid channel '${String(ch)}'. Supported channels are: website, linkedin, newsletter.`,
+        };
+      }
+    }
+
+    // 2. Strict guardrail: requested channels must match the approved channel selection.
+    // Unapproved additional channels or altered subsets require renewed approval.
+    const sortedApproved = [...new Set(approvedChannels)].sort();
+    const sortedRequested = [...new Set(options.forcedChannels)].sort();
+
+    const matchesApproved =
+      sortedApproved.length === sortedRequested.length &&
+      sortedApproved.every((ch, i) => ch === sortedRequested[i]);
+
+    if (!matchesApproved) {
+      return {
+        success: false,
+        post: formatPostRecord(post),
+        results: [],
+        error: `Channel selection mismatch: Requested channels [${sortedRequested.join(", ")}] do not match the approved channel selection [${sortedApproved.join(", ")}]. Channel modifications require renewed approval before publication.`,
+      };
+    }
+
+    channelsToPublish = sortedRequested as PublishChannel[];
+  } else {
+    // Validate saved approved channels
+    for (const ch of approvedChannels) {
+      if (!SUPPORTED_CHANNELS.includes(ch)) {
+        return {
+          success: false,
+          post: formatPostRecord(post),
+          results: [],
+          error: `Invalid channel '${String(ch)}'. Supported channels are: website, linkedin, newsletter.`,
+        };
+      }
+    }
+    channelsToPublish = approvedChannels;
   }
 
   // Parse structured channel contents

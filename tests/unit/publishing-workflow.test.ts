@@ -186,6 +186,7 @@ describe("Phase 3: Publishing Invariants & Sandbox Demonstration Workflow", () =
     try {
       mockPost.status = "approved";
       mockPost.approvedAt = new Date();
+      mockPost.targetChannels = ["website"];
 
       const result = await publishContentPost("post_test_123", {
         forcedChannels: ["website"],
@@ -236,5 +237,115 @@ describe("Phase 3: Publishing Invariants & Sandbox Demonstration Workflow", () =
     // Publication logic checks
     const canPublish = nextStatus === "approved";
     assert.strictEqual(canPublish, false);
+  });
+
+  it("enforces channel re-approval invariant: changing targetChannels on an approved post resets status to 'in_review' and clears approvedAt", async () => {
+    mockPost.status = "approved";
+    mockPost.approvedAt = new Date();
+    mockPost.targetChannels = ["website", "linkedin"];
+
+    // Simulate PATCH handler channel change detection
+    const incomingChannels = ["website", "linkedin", "newsletter"];
+    const existingChannels = Array.isArray(mockPost.targetChannels) ? mockPost.targetChannels : [];
+
+    const sortedExisting = [...new Set(existingChannels)].sort();
+    const sortedIncoming = [...new Set(incomingChannels)].sort();
+
+    const channelsChanged =
+      sortedExisting.length !== sortedIncoming.length ||
+      sortedExisting.some((ch, idx) => ch !== sortedIncoming[idx]);
+
+    const wasApprovedOrPublished =
+      mockPost.status === "approved" ||
+      mockPost.status === "published" ||
+      mockPost.status === "partially_published";
+
+    const approvalReset = channelsChanged && wasApprovedOrPublished;
+
+    assert.strictEqual(channelsChanged, true);
+    assert.strictEqual(approvalReset, true);
+
+    // Apply the update as PATCH handler does
+    mockPost.targetChannels = incomingChannels;
+    if (approvalReset) {
+      mockPost.status = "in_review";
+      mockPost.approvedAt = null;
+    }
+
+    assert.strictEqual(mockPost.status, "in_review");
+    assert.strictEqual(mockPost.approvedAt, null);
+
+    // Verify publication is now blocked until renewed human approval
+    const publishAttempt = await publishContentPost(mockPost.id);
+    assert.strictEqual(publishAttempt.success, false);
+    assert.ok(
+      publishAttempt.error?.includes("Explicit human approval is required before publishing"),
+      `Expected re-approval error, got: ${publishAttempt.error}`
+    );
+    assert.strictEqual(mockLogs.length, 0);
+  });
+
+  it("strictly rejects publication when requested channels include an unapproved additional channel", async () => {
+    mockPost.status = "approved";
+    mockPost.approvedAt = new Date();
+    mockPost.targetChannels = ["website", "linkedin"]; // Approved ONLY for website and linkedin
+
+    // Attempt to publish to newsletter as well without approval
+    const result = await publishContentPost("post_test_123", {
+      forcedChannels: ["website", "linkedin", "newsletter"],
+    });
+
+    assert.strictEqual(result.success, false);
+    assert.ok(
+      result.error?.includes("Channel selection mismatch"),
+      `Expected channel selection mismatch error, got: ${result.error}`
+    );
+    assert.ok(
+      result.error?.includes("Channel modifications require renewed approval"),
+      `Expected re-approval requirement in error, got: ${result.error}`
+    );
+    // INVARIANT: No publishing logs must be created for rejected requests
+    assert.strictEqual(mockLogs.length, 0);
+  });
+
+  it("strictly rejects publication when requested channels omit approved channels or differ in selection", async () => {
+    mockPost.status = "approved";
+    mockPost.approvedAt = new Date();
+    mockPost.targetChannels = ["website", "linkedin", "newsletter"];
+
+    // Attempt to publish to only a subset without renewed approval
+    const result = await publishContentPost("post_test_123", {
+      forcedChannels: ["website"],
+    });
+
+    assert.strictEqual(result.success, false);
+    assert.ok(result.error?.includes("Channel selection mismatch"));
+    assert.strictEqual(mockLogs.length, 0);
+  });
+
+  it("publishes successfully in sandbox mode when requested channels match the approved channel selection", async () => {
+    mockPost.status = "approved";
+    mockPost.approvedAt = new Date();
+    mockPost.targetChannels = ["website", "linkedin"];
+
+    delete process.env.CMS_WEBHOOK_URL;
+    delete process.env.LINKEDIN_WEBHOOK_URL;
+    delete process.env.NEWSLETTER_WEBHOOK_URL;
+
+    // Channels match approved selection (order varied)
+    const result = await publishContentPost("post_test_123", {
+      forcedChannels: ["linkedin", "website"],
+    });
+
+    assert.strictEqual(result.success, true);
+    assert.strictEqual(result.results.length, 2);
+    for (const r of result.results) {
+      assert.strictEqual(r.status, "simulated");
+    }
+    assert.strictEqual(mockLogs.length, 2);
+    for (const log of mockLogs) {
+      assert.strictEqual(log.status, "simulated");
+    }
+    assert.strictEqual(mockPost.status, "published");
   });
 });

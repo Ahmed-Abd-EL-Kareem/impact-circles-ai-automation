@@ -125,6 +125,8 @@ export async function PATCH(req: NextRequest, { params }: RouteParams) {
     }
 
     const VALID_CHANNELS = ["website", "linkedin", "newsletter"];
+    let channelsChanged = false;
+
     if (body.targetChannels !== undefined) {
       if (!Array.isArray(body.targetChannels) || body.targetChannels.length === 0) {
         return NextResponse.json(
@@ -147,20 +149,46 @@ export async function PATCH(req: NextRequest, { params }: RouteParams) {
           );
         }
       }
+
+      // Detect if channel selection changed compared to existing.targetChannels
+      let existingChannels: string[] = [];
+      if (Array.isArray(existing.targetChannels)) {
+        existingChannels = existing.targetChannels.map(String);
+      } else if (typeof existing.targetChannels === "string") {
+        try {
+          const parsed = JSON.parse(existing.targetChannels);
+          if (Array.isArray(parsed)) existingChannels = parsed.map(String);
+        } catch {
+          existingChannels = [];
+        }
+      }
+
+      const sortedExisting = [...new Set(existingChannels)].sort();
+      const sortedIncoming = [...new Set((body.targetChannels as string[]).map(String))].sort();
+
+      if (
+        sortedExisting.length !== sortedIncoming.length ||
+        sortedExisting.some((ch, idx) => ch !== sortedIncoming[idx])
+      ) {
+        channelsChanged = true;
+      }
+
       updates.targetChannels = body.targetChannels;
     }
 
-    // Check if status should be reset due to content edits
-    // Any edit to approved/published content requires renewed approval!
+    // Check if status should be reset due to content or channel edits
+    // Any edit to approved/published content or channel selection requires renewed approval!
     const wasApprovedOrPublished =
       existing.status === "approved" ||
       existing.status === "published" ||
       existing.status === "partially_published";
 
-    if (contentChanged && wasApprovedOrPublished) {
+    const approvalReset = (contentChanged || channelsChanged) && wasApprovedOrPublished;
+
+    if (approvalReset) {
       updates.status = "in_review";
       updates.approvedAt = null;
-    } else if (contentChanged && existing.status === "rejected") {
+    } else if ((contentChanged || channelsChanged) && existing.status === "rejected") {
       updates.status = "in_review";
       updates.rejectionReason = null;
     }
@@ -209,7 +237,8 @@ export async function PATCH(req: NextRequest, { params }: RouteParams) {
         })),
       },
       contentChanged,
-      approvalReset: contentChanged && wasApprovedOrPublished,
+      channelsChanged,
+      approvalReset,
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Internal server error";

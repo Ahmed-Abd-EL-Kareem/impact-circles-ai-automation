@@ -28,7 +28,7 @@ This repository delivers two production-grade AI-powered vertical slices running
    - Strict server-side schema validation (`src/lib/content/content-validation.ts`) guaranteeing complete and usable copy across all 3 formats.
    - Interactive Human-in-the-Loop review and editing interface.
    - **Strict Human Approval Guardrail**: Server-side rejection (HTTP 400) of any publication attempt prior to explicit human approval.
-   - **Re-Approval Invariant**: Any edit saved to an approved or published post immediately resets its status to `in_review`, invalidating prior approval.
+   - **Re-Approval Invariant**: Any edit saved to an approved or published post (content copy or destination channels) immediately resets its status to `in_review` and clears approval. Furthermore, the publishing engine strictly verifies requested channels match the approved set, rejecting unapproved channel additions.
    - Multi-channel automated publishing dispatcher (`website`, `linkedin`, `newsletter`) with honest sandbox demonstration logging into `PublishingLog` (no fabricated live publication claims).
    - Direct Next.js API authoritative execution path paired with a companion n8n workflow export (`n8n/workflows/content-publishing.json`).
 
@@ -142,11 +142,13 @@ Phase 3 uses a direct Next.js API architecture as the single authoritative execu
   - Server-side check in `publishContentPost`: if `post.status !== 'approved'`, returns HTTP 400 error: `"Explicit human approval is required before publishing."`
   - Client-side UI disables the publish button and displays a warning tooltip until the post is approved.
 - **Re-Approval Invariant**:
-  - Whenever an approved or published post is edited via `PATCH /api/content/[id]`, if `contentChanged` is true, the system automatically:
+  - Whenever an approved or published post is edited via `PATCH /api/content/[id]`, if either copy (`contentChanged`) or destination channels (`channelsChanged`) are modified, the system automatically:
     - Sets `status = 'in_review'`.
     - Resets `approvedAt = null`.
-    - Returns `approvalReset: true` in the API response.
+    - Returns `approvalReset: true` and `channelsChanged` flags in the API response.
   - The UI informs the user that renewed human approval is required before any further dispatch can occur.
+  - In `publishContentPost`, the engine strictly validates that requested channels match the approved channel selection. Attempting to publish to an unapproved additional channel or an altered channel set is rejected with HTTP 400 (`"Channel selection mismatch: Requested channels [...] do not match the approved channel selection [...]. Channel modifications require renewed approval before publication."`).
+  - In `ContentReviewModal.tsx`, the UI compares selected channel checkboxes against approved channels in real time (`channelsMatch`), immediately disabling the publish action and guiding the user to save and re-approve if the channel selection is altered.
 
 ### E. Multi-Channel Publishing & Honest Demonstration Sandbox (`src/lib/services/publishing.ts`)
 - Supports channel dispatch to `website`, `linkedin`, and `newsletter`.
@@ -171,7 +173,7 @@ Phase 3 uses a direct Next.js API architecture as the single authoritative execu
 
 ## 4. Test Suites & Complete Verification Results
 
-### Unit Test Suite: 70 Tests Across 9 Suites (100% Passing)
+### Unit Test Suite: 74 Tests Across 9 Suites (100% Passing)
 
 Run via `npm test` (`node --test tests/unit/*.test.ts`):
 
@@ -185,8 +187,8 @@ Run via `npm test` (`node --test tests/unit/*.test.ts`):
 | `tests/unit/webhook-auth.test.ts` | 11 | Fail-closed auth, header casing, 10MB size bounds, idempotency key validation | PASS |
 | `tests/unit/idempotency.test.ts` | 5 | Concurrent race safety, tamper prevention, timeout-after-persistence replay | PASS |
 | `tests/unit/content-generation.test.ts` | 7 | Real `validateGeneratedContentPackage` tests, 3-format validation, character counts | PASS |
-| `tests/unit/publishing-workflow.test.ts` | 8 | Real `publishContentPost` tests, strict approval guardrails, channel validation | PASS |
-| **Total** | **70** | **Comprehensive Unit Coverage Across Phases 2 & 3** | **100% PASS** |
+| `tests/unit/publishing-workflow.test.ts` | 12 | Real `publishContentPost` tests, strict approval guardrails, channel validation, channel re-approval & mismatch rejection | PASS |
+| **Total** | **74** | **Comprehensive Unit Coverage Across Phases 2 & 3** | **100% PASS** |
 
 ### Integration Test Suite
 - **Direct Pipeline Test (`npm run test:direct`)**:
@@ -244,6 +246,6 @@ Run via `npm test` (`node --test tests/unit/*.test.ts`):
 5. **Request Idempotency**: Fast-path replay prevents duplicate writes and redundant AI API calls.
 6. **SQL Injection Protection**: All PostgreSQL queries use parameterized placeholders (`$1..$N`).
 7. **Human Approval Guardrail**: Content cannot be published without explicit human approval (server-side HTTP 400 rejection).
-8. **Re-Approval on Edit**: Any modification to approved content invalidates prior approval and resets status to `in_review`.
+8. **Re-Approval on Edit**: Any modification to approved content or target channels invalidates prior approval, resets status to `in_review`, and requires renewed human approval before publication.
 9. **Honest Simulation**: Demonstration dispatches are honestly recorded with `"simulated"` status and clearly labeled in the UI.
 10. **Single Persistence Discipline**: Database writes are strictly coordinated with atomic updates and transactional audit logging.

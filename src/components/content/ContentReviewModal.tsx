@@ -55,6 +55,13 @@ function parseWebsite(post: ContentPostRecord): { title: string; subtitle: strin
   }
 }
 
+function channelsMatch(a: PublishChannel[], b: PublishChannel[]): boolean {
+  if (a.length !== b.length) return false;
+  const sortedA = [...a].sort();
+  const sortedB = [...b].sort();
+  return sortedA.every((val, idx) => val === sortedB[idx]);
+}
+
 export function ContentReviewModal({
   post,
   onClose,
@@ -80,6 +87,14 @@ export function ContentReviewModal({
   const [isApproving, setIsApproving] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
   const [actionMessage, setActionMessage] = useState<{ type: "success" | "error" | "warning"; text: string } | null>(null);
+
+  const savedChannels: PublishChannel[] =
+    post.targetChannels && post.targetChannels.length > 0
+      ? post.targetChannels
+      : ["website", "linkedin", "newsletter"];
+
+  const channelsModifiedAfterApproval =
+    post.status === "approved" && !channelsMatch(selectedChannels, savedChannels);
 
   const toggleChannel = (channel: PublishChannel) => {
     setSelectedChannels((prev) =>
@@ -232,6 +247,14 @@ export function ContentReviewModal({
       return;
     }
 
+    if (channelsModifiedAfterApproval) {
+      setActionMessage({
+        type: "error",
+        text: "Channel selection has changed since approval. The new selection must be saved and approved again before publishing.",
+      });
+      return;
+    }
+
     setIsPublishing(true);
     setActionMessage(null);
 
@@ -361,6 +384,27 @@ export function ContentReviewModal({
           </div>
         )}
 
+        {/* Channel Modification Warning for Approved Content */}
+        {channelsModifiedAfterApproval && (
+          <div className="flex items-center justify-between border-b border-amber-300 bg-amber-50 px-6 py-2.5 text-xs font-medium text-amber-900 dark:border-amber-700/50 dark:bg-amber-950/50 dark:text-amber-200">
+            <div className="flex items-center gap-2">
+              <svg className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+              <span>
+                <strong>Channel selection modified:</strong> Target channels were changed after approval. You must save edits and obtain renewed approval before publishing.
+              </span>
+            </div>
+            <button
+              onClick={handleSaveChanges}
+              disabled={isSaving}
+              className="ml-3 shrink-0 rounded-lg bg-amber-700 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-amber-800 disabled:opacity-50 dark:bg-amber-600 dark:hover:bg-amber-500 cursor-pointer"
+            >
+              {isSaving ? "Saving..." : "Save Edits"}
+            </button>
+          </div>
+        )}
+
         {/* Tab Navigation & Target Channels Selector */}
         <div className="flex flex-wrap items-center justify-between border-b border-black/[0.06] px-6 py-2.5 bg-zinc-50/60 dark:border-white/[0.06] dark:bg-zinc-900/40 gap-3">
           <div className="flex items-center gap-1.5">
@@ -409,6 +453,11 @@ export function ContentReviewModal({
           {/* Channels Selector */}
           <div className="flex items-center gap-2">
             <span className="text-[11px] font-semibold text-zinc-500 dark:text-zinc-400">Target Channels:</span>
+            {channelsModifiedAfterApproval && (
+              <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800 dark:bg-amber-950/60 dark:text-amber-300">
+                Re-approval needed
+              </span>
+            )}
             <label className="inline-flex items-center gap-1 text-[11px] font-medium text-zinc-700 dark:text-zinc-300 cursor-pointer">
               <input
                 type="checkbox"
@@ -690,10 +739,12 @@ export function ContentReviewModal({
 
             <button
               onClick={handlePublish}
-              disabled={isPublishing || post.status !== "approved"}
+              disabled={isPublishing || post.status !== "approved" || channelsModifiedAfterApproval}
               title={
                 post.status !== "approved"
                   ? "Content must be explicitly approved before publishing"
+                  : channelsModifiedAfterApproval
+                  ? "Channel selection modified: save edits and obtain renewed approval before publishing"
                   : "Trigger automated demonstration sandbox publication"
               }
               className="apple-press flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-semibold text-white shadow-xs hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed dark:bg-emerald-600 dark:hover:bg-emerald-500 cursor-pointer"

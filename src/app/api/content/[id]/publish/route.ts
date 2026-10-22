@@ -62,6 +62,9 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
 
       const isClientError =
         result.error?.includes("Explicit human approval is required") ||
+        result.error?.includes("Channel selection mismatch") ||
+        result.error?.includes("Channel mismatch") ||
+        result.error?.includes("Validation error") ||
         result.error?.includes("Invalid channel");
 
       return NextResponse.json(
