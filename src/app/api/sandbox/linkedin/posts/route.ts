@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { getSandboxBaseUrl, shouldFailChannel, verifySandboxAuth } from "@/lib/services/sandbox-auth";
 
@@ -35,6 +36,11 @@ export async function POST(req: NextRequest) {
         url: publishedUrl,
       },
     });
+
+    try {
+      revalidatePath("/sandbox");
+      revalidatePath("/sandbox/linkedin/[id]", "page");
+    } catch {}
 
     return NextResponse.json(
       {

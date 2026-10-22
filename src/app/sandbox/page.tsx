@@ -1,7 +1,15 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { prisma } from "@/lib/db";
+import { SandboxRefreshControl } from "@/components/sandbox/SandboxRefreshControl";
 
 export const instant = false;
+
+export const metadata: Metadata = {
+  title: "Sandbox Publishing Records • Impact Circles",
+  description:
+    "Live mock records dispatched to Website CMS, LinkedIn, and Newsletter sandbox targets during automated publishing execution.",
+};
 
 function getCleanSandboxHref(pub: { channel: string; slug: string | null; externalId: string; url: string }): string {
   if (pub.url) {
@@ -36,51 +44,72 @@ export default async function SandboxIndexPage() {
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 p-6 sm:p-10 font-sans">
       <div className="max-w-4xl mx-auto space-y-6">
-        {/* Banner */}
-        <div className="rounded-2xl border border-amber-300/80 bg-amber-50/90 dark:border-amber-700/50 dark:bg-amber-950/30 p-4 sm:p-5 flex items-center justify-between shadow-xs">
-          <div className="flex items-center gap-3">
-            <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-amber-500/20 text-amber-700 dark:text-amber-300 font-bold text-sm">
+        {/* Banner with Clear Context */}
+        <div className="rounded-2xl border border-amber-300/80 bg-amber-50/90 dark:border-amber-700/50 dark:bg-amber-950/30 p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 shadow-xs">
+          <div className="flex items-start gap-3">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-amber-500/20 text-amber-700 dark:text-amber-300 font-bold text-sm">
               ⚠
             </span>
-            <div>
+            <div className="space-y-1">
               <h2 className="text-sm font-bold text-amber-900 dark:text-amber-200 uppercase tracking-wider">
-                Sandbox — Demo Only
+                Sandbox Environment — Demo Mock Targets
               </h2>
-              <p className="text-xs text-amber-800/80 dark:text-amber-300/80 mt-0.5">
-                Local mock publishing destinations simulating external WordPress, LinkedIn, and Newsletter targets.
+              <p className="text-xs text-amber-800/90 dark:text-amber-300/90">
+                This destination displays published records from the <strong>AI Content Generation & Publishing Agent</strong> (Website CMS, LinkedIn, and Newsletter).
+              </p>
+              <p className="text-[11px] text-amber-700/80 dark:text-amber-400/80">
+                Processed receipts, invoices, and expense ledger items live on the{" "}
+                <Link href="/?tab=finance" className="underline font-semibold hover:text-amber-900 dark:hover:text-amber-200">
+                  Financial Document Assistant Dashboard
+                </Link>.
               </p>
             </div>
           </div>
-          <Link
-            href="/"
-            className="text-xs font-semibold px-3 py-1.5 rounded-xl border border-amber-400/50 bg-white dark:bg-zinc-900 text-amber-900 dark:text-amber-200 hover:bg-amber-100/50 dark:hover:bg-zinc-800 transition-colors"
-          >
-            ← Back to App
-          </Link>
+          <div className="flex items-center gap-2 self-start sm:self-center shrink-0">
+            <Link
+              href="/?tab=content"
+              className="text-xs font-semibold px-3 py-1.5 rounded-xl border border-amber-400/50 bg-white dark:bg-zinc-900 text-amber-900 dark:text-amber-200 hover:bg-amber-100/50 dark:hover:bg-zinc-800 transition-colors shadow-xs"
+            >
+              Content Agent →
+            </Link>
+            <Link
+              href="/?tab=finance"
+              className="text-xs font-semibold px-3 py-1.5 rounded-xl bg-amber-600 text-white hover:bg-amber-700 transition-colors shadow-xs"
+            >
+              Finance Dashboard →
+            </Link>
+          </div>
         </div>
 
-        {/* Title Header */}
-        <div className="flex items-baseline justify-between">
+        {/* Title Header with Live Refresh Control */}
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
             <h1 className="text-2xl font-bold tracking-tight">Sandbox Published Records</h1>
             <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
               Real HTTP POST dispatches received and saved during automated publishing execution.
             </p>
           </div>
-          <span className="font-mono text-xs text-zinc-500 bg-zinc-200 dark:bg-zinc-800 px-2.5 py-1 rounded-lg">
-            {publications.length} publication(s)
-          </span>
+
+          <SandboxRefreshControl initialCount={publications.length} />
         </div>
 
         {/* List */}
         {publications.length === 0 ? (
           <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-12 text-center space-y-3">
-            <p className="text-sm text-zinc-500 dark:text-zinc-400">
+            <p className="text-sm text-zinc-500 dark:text-zinc-400 font-medium">
               No sandbox publications have been created yet.
             </p>
-            <p className="text-xs text-zinc-400 dark:text-zinc-500">
-              Approve and publish a content post from the Content Agent view to see live dispatch results here.
+            <p className="text-xs text-zinc-400 dark:text-zinc-500 max-w-md mx-auto">
+              Generate a content package in the Content Agent view, approve it, and click &ldquo;Publish to Selected Channels&rdquo; to see live dispatch results here.
             </p>
+            <div className="pt-2">
+              <Link
+                href="/?tab=content"
+                className="inline-flex items-center gap-1.5 text-xs font-semibold px-4 py-2 rounded-xl bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 hover:opacity-90 transition-opacity"
+              >
+                Go to Content Agent →
+              </Link>
+            </div>
           </div>
         ) : (
           <div className="space-y-3">

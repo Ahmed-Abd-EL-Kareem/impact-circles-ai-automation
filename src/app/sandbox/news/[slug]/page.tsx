@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
@@ -7,6 +8,14 @@ interface PageProps {
 }
 
 export const instant = false;
+
+export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
+  const { slug } = await params;
+  return {
+    title: `Website Announcement: ${decodeURIComponent(slug)} • Sandbox`,
+    description: "Mock website CMS announcement publication record.",
+  };
+}
 
 export default async function SandboxNewsPage({ params }: PageProps) {
   const { slug } = await params;

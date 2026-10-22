@@ -10,22 +10,53 @@ if (!fs.existsSync(dbPath)) {
 }
 
 const db = new DatabaseSync(dbPath);
-const workflowJson = JSON.parse(fs.readFileSync("n8n/workflows/finance-processing.json", "utf8"));
 
-const existing = db.prepare("SELECT id, activeVersionId FROM workflow_entity WHERE name = 'Finance Document Processing Pipeline'").get();
+const workflows = [
+  {
+    name: "Finance Document Processing Pipeline",
+    filePath: "n8n/workflows/finance-processing.json",
+  },
+  {
+    name: "Content Generation and Publishing Pipeline",
+    filePath: "n8n/workflows/content-publishing.json",
+  },
+];
 
-if (existing) {
-  console.log("Found workflow in SQLite:", existing.id);
-  const nodesJson = JSON.stringify(workflowJson.nodes);
-  const connectionsJson = JSON.stringify(workflowJson.connections);
-
-  db.prepare("UPDATE workflow_entity SET nodes = ?, connections = ? WHERE id = ?").run(nodesJson, connectionsJson, existing.id);
-
-  if (existing.activeVersionId) {
-    db.prepare("UPDATE workflow_history SET nodes = ?, connections = ? WHERE versionId = ?").run(nodesJson, connectionsJson, existing.activeVersionId);
-    console.log("Updated workflow_history for activeVersionId:", existing.activeVersionId);
+for (const wf of workflows) {
+  if (!fs.existsSync(wf.filePath)) {
+    console.warn(`File not found: ${wf.filePath}`);
+    continue;
   }
-  console.log("✓ Successfully synchronized n8n workflow into SQLite database!");
-} else {
-  console.log("Workflow 'Finance Document Processing Pipeline' not found in SQLite.");
+
+  const workflowJson = JSON.parse(fs.readFileSync(wf.filePath, "utf8"));
+  const existingWorkflows = db
+    .prepare("SELECT id, activeVersionId, active FROM workflow_entity WHERE name = ?")
+    .all(wf.name);
+
+  if (existingWorkflows.length > 0) {
+    const nodesJson = JSON.stringify(workflowJson.nodes);
+    const connectionsJson = JSON.stringify(workflowJson.connections);
+
+    for (const existing of existingWorkflows) {
+      console.log(
+        `Synchronizing workflow '${wf.name}' (ID: ${existing.id}, active: ${existing.active}) in SQLite`
+      );
+
+      db.prepare(
+        "UPDATE workflow_entity SET nodes = ?, connections = ? WHERE id = ?"
+      ).run(nodesJson, connectionsJson, existing.id);
+
+      if (existing.activeVersionId) {
+        db.prepare(
+          "UPDATE workflow_history SET nodes = ?, connections = ? WHERE versionId = ?"
+        ).run(nodesJson, connectionsJson, existing.activeVersionId);
+        console.log(
+          `Updated workflow_history for activeVersionId: ${existing.activeVersionId}`
+        );
+      }
+    }
+    console.log(`✓ Successfully synchronized '${wf.name}' into SQLite database!\n`);
+  } else {
+    console.log(`Workflow '${wf.name}' not found in SQLite.\n`);
+  }
 }

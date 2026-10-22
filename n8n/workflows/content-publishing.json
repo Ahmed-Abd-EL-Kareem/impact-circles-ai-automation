@@ -20,7 +20,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Fail-closed verification of webhook secret and content generation/publishing payload\nconst headers = $input.item.json.headers || {};\nconst secretHeader = headers['x-webhook-secret'] || headers['X-Webhook-Secret'];\nconst expectedSecret = ('45e76db89ee5ca001af20a4c23ebb4a898bebe04157cb677b9b256c3fc639e24').trim();\n\nif (!expectedSecret) {\n  return {\n    isValid: false,\n    statusCode: 500,\n    error: 'Server configuration error: N8N_WEBHOOK_SECRET is not configured on server.'\n  };\n}\n\nif (!secretHeader || secretHeader !== expectedSecret) {\n  return {\n    isValid: false,\n    statusCode: 401,\n    error: 'Unauthorized: Invalid or missing webhook shared secret.'\n  };\n}\n\nconst body = $input.item.json.body || {};\nconst action = (body.action || 'generate').trim().toLowerCase();\n\nif (!['generate', 'publish'].includes(action)) {\n  return {\n    isValid: false,\n    statusCode: 400,\n    error: 'Bad Request: action must be either \"generate\" or \"publish\".'\n  };\n}\n\nif (action === 'generate') {\n  const sourcePrompt = typeof body.sourcePrompt === 'string' ? body.sourcePrompt.trim() : '';\n  if (!sourcePrompt || sourcePrompt.length < 10) {\n    return {\n      isValid: false,\n      statusCode: 400,\n      error: 'Bad Request: sourcePrompt must be at least 10 characters describing the research or announcement.'\n    };\n  }\n\n  const allowedTypes = ['research_update', 'event_announcement', 'project_findings'];\n  const contentType = (body.contentType || 'research_update').trim();\n  if (!allowedTypes.includes(contentType)) {\n    return {\n      isValid: false,\n      statusCode: 400,\n      error: 'Bad Request: contentType must be one of: research_update, event_announcement, project_findings.'\n    };\n  }\n\n  const targetChannels = Array.isArray(body.targetChannels) && body.targetChannels.length > 0\n    ? body.targetChannels\n    : ['website', 'linkedin', 'newsletter'];\n\n  return {\n    isValid: true,\n    action: 'generate',\n    sourcePrompt,\n    contentType,\n    additionalInstructions: body.additionalInstructions || '',\n    targetChannels\n  };\n}\n\n// action === 'publish'\nconst postId = typeof body.postId === 'string' ? body.postId.trim() : '';\nif (!postId) {\n  return {\n    isValid: false,\n    statusCode: 400,\n    error: 'Bad Request: postId is required for publish action.'\n  };\n}\n\nconst channels = Array.isArray(body.channels) && body.channels.length > 0\n  ? body.channels\n  : null;\n\nreturn {\n  isValid: true,\n  action: 'publish',\n  postId,\n  channels\n};"
+        "jsCode": "// Fail-closed verification of webhook secret and content generation/publishing payload\nconst headers = $input.item.json.headers || {};\nconst secretHeader = headers['x-webhook-secret'] || headers['X-Webhook-Secret'];\nlet expectedSecret = '';\ntry {\n  expectedSecret = ($env.N8N_WEBHOOK_SECRET || '').trim();\n} catch (e) {\n  expectedSecret = '';\n}\n\nif (!expectedSecret) {\n  return {\n    isValid: false,\n    statusCode: 500,\n    error: 'Server configuration error: N8N_WEBHOOK_SECRET is not configured or accessible on server.'\n  };\n}\n\nif (!secretHeader || secretHeader !== expectedSecret) {\n  return {\n    isValid: false,\n    statusCode: 401,\n    error: 'Unauthorized: Invalid or missing webhook shared secret.'\n  };\n}\n\nconst body = $input.item.json.body || {};\nconst action = (typeof body.action === 'string' ? body.action.trim().toLowerCase() : 'generate');\n\nif (!['generate', 'publish'].includes(action)) {\n  return {\n    isValid: false,\n    statusCode: 400,\n    error: 'Bad Request: action must be either \"generate\" or \"publish\".'\n  };\n}\n\nif (action === 'generate') {\n  const sourcePrompt = typeof body.sourcePrompt === 'string' ? body.sourcePrompt.trim() : '';\n  if (!sourcePrompt || sourcePrompt.length < 10) {\n    return {\n      isValid: false,\n      statusCode: 400,\n      error: 'Bad Request: sourcePrompt must be at least 10 characters describing the research or announcement.'\n    };\n  }\n\n  const allowedTypes = ['research_update', 'event_announcement', 'project_findings'];\n  const contentType = (typeof body.contentType === 'string' ? body.contentType.trim() : 'research_update');\n  if (!allowedTypes.includes(contentType)) {\n    return {\n      isValid: false,\n      statusCode: 400,\n      error: 'Bad Request: contentType must be one of: research_update, event_announcement, project_findings.'\n    };\n  }\n\n  const targetChannels = Array.isArray(body.targetChannels) && body.targetChannels.length > 0\n    ? body.targetChannels\n    : ['website', 'linkedin', 'newsletter'];\n\n  return {\n    isValid: true,\n    action: 'generate',\n    sourcePrompt,\n    contentType,\n    additionalInstructions: typeof body.additionalInstructions === 'string' ? body.additionalInstructions : '',\n    targetChannels\n  };\n}\n\n// action === 'publish'\nconst postId = typeof body.postId === 'string' ? body.postId.trim() : '';\nif (!postId) {\n  return {\n    isValid: false,\n    statusCode: 400,\n    error: 'Bad Request: postId is required for publish action.'\n  };\n}\n\nconst channels = Array.isArray(body.channels) && body.channels.length > 0\n  ? body.channels\n  : null;\n\nreturn {\n  isValid: true,\n  action: 'publish',\n  postId,\n  channels\n};"
       },
       "id": "67e82927-699d-41d0-aca0-d626842b3812",
       "name": "Validate Request & Secret",
@@ -116,7 +116,44 @@
     },
     {
       "parameters": {
-        "jsCode": "const response = $input.item.json;\nconst prev = $('Route Action').first().json;\n\nlet rawText = '';\nif (typeof response?.output === 'string') {\n  rawText = response.output;\n} else if (typeof response?.text === 'string') {\n  rawText = response.text;\n} else if (response?.candidates?.[0]?.content?.parts?.[0]?.text) {\n  rawText = response.candidates[0].content.parts[0].text;\n} else if (typeof response === 'string') {\n  rawText = response;\n} else {\n  throw new Error('Gemini API returned an invalid or empty response structure.');\n}\n\nlet cleaned = rawText.trim();\nif (cleaned.startsWith('```json')) {\n  cleaned = cleaned.replace(/^```json\\s*/, '').replace(/\\s*```$/, '');\n} else if (cleaned.startsWith('```')) {\n  cleaned = cleaned.replace(/^```\\s*/, '').replace(/\\s*```$/, '');\n}\n\nlet data = {};\ntry {\n  data = JSON.parse(cleaned.trim());\n} catch (e) {\n  throw new Error('Failed to parse Gemini output as JSON: ' + rawText.slice(0, 100));\n}\n\nconst title = (data.title || 'Impact Circles Announcement').trim().slice(0, 255);\n\nconst linkedinPostText = (data.linkedin?.postText || data.linkedin?.content || '').trim();\nconst linkedinHashtags = Array.isArray(data.linkedin?.hashtags) ? data.linkedin.hashtags : ['#ImpactCircles'];\nconst linkedin = {\n  postText: linkedinPostText,\n  content: linkedinPostText,\n  hashtags: linkedinHashtags,\n  characterCount: linkedinPostText.length\n};\n\nconst newsletterSubject = (data.newsletter?.subject || title).trim();\nconst newsletterPreview = (data.newsletter?.previewText || data.newsletter?.preview || data.newsletter?.summary || '').trim();\nconst newsletterBody = (data.newsletter?.bodyText || data.newsletter?.body || data.newsletter?.summary || '').trim();\nconst newsletterCta = (data.newsletter?.callToAction || data.newsletter?.cta || 'Read more').trim();\nconst newsletter = {\n  subject: newsletterSubject,\n  previewText: newsletterPreview,\n  preview: newsletterPreview,\n  bodyText: newsletterBody,\n  body: newsletterBody,\n  callToAction: newsletterCta,\n  cta: newsletterCta,\n  summary: newsletterPreview || newsletterBody\n};\n\nconst websiteTitle = (data.website?.title || title).trim();\nconst websiteSubtitle = (data.website?.subtitle || data.website?.excerpt || data.summary || '').trim();\nconst websiteSlug = (data.website?.slug || title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')).trim();\nconst websiteMarkdown = (data.website?.bodyMarkdown || data.website?.markdownContent || data.website?.markdown || '').trim();\nconst websiteTags = Array.isArray(data.website?.tags) ? data.website.tags : ['Research'];\nconst website = {\n  title: websiteTitle,\n  subtitle: websiteSubtitle,\n  excerpt: websiteSubtitle,\n  slug: websiteSlug,\n  bodyMarkdown: websiteMarkdown,\n  markdownContent: websiteMarkdown,\n  tags: websiteTags\n};\n\nconst generatedId = 'cp_' + Date.now().toString(36) + Math.random().toString(36).substring(2, 8);\n\nreturn {\n  id: generatedId,\n  title,\n  sourcePrompt: prev.sourcePrompt,\n  contentType: prev.contentType,\n  status: 'draft',\n  linkedinContent: JSON.stringify(linkedin),\n  newsletterContent: JSON.stringify(newsletter),\n  websiteContent: JSON.stringify(website),\n  targetChannels: JSON.stringify(prev.targetChannels),\n  metadata: JSON.stringify({\n    summary: data.summary || websiteSubtitle || '',\n    generatedVia: 'n8n_gemini_agent',\n    generatedAt: new Date().toISOString()\n  })\n};"
+        "promptType": "define",
+        "text": "=Generate publication content using the following input:\n\nInput type: {{ $json.contentType }}\nContent prompt: {{ $json.sourcePrompt }}\nAdditional guidelines: {{ $json.additionalInstructions || 'None' }}",
+        "options": {
+          "systemMessage": "You are the Content Publishing Agent for Impact Circles. Transform the supplied source input into 3 polished publication formats: LinkedIn, Newsletter, and Website Announcement.\n\nReturn ONLY valid JSON. Do not include Markdown code fences or explanatory text.\n\nUse exactly this schema:\n{\n  \"title\": \"Punchy engaging title\",\n  \"summary\": \"1-2 sentence executive briefing\",\n  \"linkedin\": {\n    \"postText\": \"Engaging LinkedIn post formatted with a hook, bullet insights, and call to action\",\n    \"hashtags\": [\"#ImpactCircles\", \"#Innovation\", \"#Sustainability\"],\n    \"characterCount\": 800\n  },\n  \"newsletter\": {\n    \"subject\": \"Newsletter subject line\",\n    \"previewText\": \"Brief preheader teaser text\",\n    \"bodyText\": \"Structured briefing for community newsletter with sections and key takeaways\",\n    \"callToAction\": \"Primary action link or prompt\"\n  },\n  \"website\": {\n    \"title\": \"Full article title\",\n    \"subtitle\": \"Informative subheading or dek explaining the impact\",\n    \"slug\": \"kebab-case-slug\",\n    \"bodyMarkdown\": \"Complete article in GitHub Flavored Markdown with headings and structured paragraphs\",\n    \"tags\": [\"Tag1\", \"Tag2\"]\n  }\n}\n\nRequirements:\n- Generate all three publication formats from the same source.\n- Follow the supplied additional guidelines.\n- Use accurate, relevant content and do not invent unsupported facts.\n- Ensure every required field is present and uses the correct data type.\n- Ensure the website slug is lowercase and uses hyphens."
+        }
+      },
+      "id": "7109cbca-5368-40ba-a571-22b6c9e8413e",
+      "name": "AI Agent1",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        700,
+        576
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "b7b04938-16eb-4a15-b51f-611a2f00a5a3",
+      "name": "Google Gemini Chat Model1",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        700,
+        400
+      ],
+      "credentials": {
+        "googlePalmApi": {
+          "id": "3XU2jU5K32wL3U1u",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.item.json;\nconst prev = $('Route Action').first().json;\n\nlet rawText = '';\nif (typeof response?.output === 'string') {\n  rawText = response.output;\n} else if (typeof response?.text === 'string') {\n  rawText = response.text;\n} else if (response?.candidates?.[0]?.content?.parts?.[0]?.text) {\n  rawText = response.candidates[0].content.parts[0].text;\n} else if (typeof response === 'string') {\n  rawText = response;\n} else {\n  return {\n    isValid: false,\n    statusCode: 502,\n    error: 'AI content generation service returned an invalid or empty response structure.'\n  };\n}\n\nlet cleaned = rawText.trim();\nif (cleaned.startsWith('```json')) {\n  cleaned = cleaned.replace(/^```json\\s*/, '').replace(/\\s*```$/, '');\n} else if (cleaned.startsWith('```')) {\n  cleaned = cleaned.replace(/^```\\s*/, '').replace(/\\s*```$/, '');\n}\n\nlet data = {};\ntry {\n  data = JSON.parse(cleaned.trim());\n} catch (e) {\n  return {\n    isValid: false,\n    statusCode: 422,\n    error: 'Validation error: Failed to parse Gemini output as JSON: ' + rawText.slice(0, 100)\n  };\n}\n\nif (!data || typeof data !== 'object' || Array.isArray(data)) {\n  return {\n    isValid: false,\n    statusCode: 422,\n    error: 'Validation error: Output must be a non-null JSON object.'\n  };\n}\n\nfunction isNonEmptyString(val) {\n  return typeof val === 'string' && val.trim().length > 0;\n}\nfunction isStringArray(val) {\n  return Array.isArray(val) && val.length > 0 && val.every(item => typeof item === 'string' && item.trim().length > 0);\n}\n\n// 1. Top-level validation\nif (!isNonEmptyString(data.title)) {\n  return { isValid: false, statusCode: 422, error: \"Validation error: 'title' is required and must be a non-empty string.\" };\n}\nif (!isNonEmptyString(data.summary)) {\n  return { isValid: false, statusCode: 422, error: \"Validation error: 'summary' is required and must be a non-empty string.\" };\n}\n\n// 2. LinkedIn validation\nif (!data.linkedin || typeof data.linkedin !== 'object' || Array.isArray(data.linkedin)) {\n  return { isValid: false, statusCode: 422, error: \"Validation error: 'linkedin' format object is required.\" };\n}\nconst linkedinText = isNonEmptyString(data.linkedin.postText)\n  ? data.linkedin.postText.trim()\n  : isNonEmptyString(data.linkedin.content)\n  ? data.linkedin.content.trim()\n  : '';\nif (!linkedinText) {\n  return { isValid: false, statusCode: 422, error: \"Validation error: 'linkedin.postText' is required and must be a non-empty string.\" };\n}\nif (!isStringArray(data.linkedin.hashtags)) {\n  return { isValid: false, statusCode: 422, error: \"Validation error: 'linkedin.hashtags' must be an array of non-empty strings.\" };\n}\nconst linkedin = {\n  postText: linkedinText,\n  content: linkedinText,\n  hashtags: data.linkedin.hashtags.map(h => h.trim()),\n  characterCount: linkedinText.length\n};\n\n// 3. Newsletter validation\nif (!data.newsletter || typeof data.newsletter !== 'object' || Array.isArray(data.newsletter)) {\n  return { isValid: false, statusCode: 422, error: \"Validation error: 'newsletter' format object is required.\" };\n}\nif (!isNonEmptyString(data.newsletter.subject)) {\n  return { isValid: false, statusCode: 422, error: \"Validation error: 'newsletter.subject' is required and must be a non-empty string.\" };\n}\nconst preview = isNonEmptyString(data.newsletter.previewText)\n  ? data.newsletter.previewText.trim()\n  : isNonEmptyString(data.newsletter.preview)\n  ? data.newsletter.preview.trim()\n  : '';\nif (!preview) {\n  return { isValid: false, statusCode: 422, error: \"Validation error: 'newsletter.previewText' is required and must be a non-empty string.\" };\n}\nconst bodyText = isNonEmptyString(data.newsletter.bodyText)\n  ? data.newsletter.bodyText.trim()\n  : isNonEmptyString(data.newsletter.body)\n  ? data.newsletter.body.trim()\n  : '';\nif (!bodyText) {\n  return { isValid: false, statusCode: 422, error: \"Validation error: 'newsletter.bodyText' is required and must be a non-empty string.\" };\n}\nconst cta = isNonEmptyString(data.newsletter.callToAction)\n  ? data.newsletter.callToAction.trim()\n  : isNonEmptyString(data.newsletter.cta)\n  ? data.newsletter.cta.trim()\n  : '';\nif (!cta) {\n  return { isValid: false, statusCode: 422, error: \"Validation error: 'newsletter.callToAction' is required and must be a non-empty string.\" };\n}\nconst newsletter = {\n  subject: data.newsletter.subject.trim(),\n  previewText: preview,\n  preview: preview,\n  bodyText: bodyText,\n  body: bodyText,\n  callToAction: cta,\n  cta: cta\n};\n\n// 4. Website validation\nif (!data.website || typeof data.website !== 'object' || Array.isArray(data.website)) {\n  return { isValid: false, statusCode: 422, error: \"Validation error: 'website' format object is required.\" };\n}\nif (!isNonEmptyString(data.website.title)) {\n  return { isValid: false, statusCode: 422, error: \"Validation error: 'website.title' is required and must be a non-empty string.\" };\n}\nconst subtitle = isNonEmptyString(data.website.subtitle)\n  ? data.website.subtitle.trim()\n  : isNonEmptyString(data.website.excerpt)\n  ? data.website.excerpt.trim()\n  : '';\nif (!subtitle) {\n  return { isValid: false, statusCode: 422, error: \"Validation error: 'website.subtitle' is required and must be a non-empty string.\" };\n}\nif (!isNonEmptyString(data.website.slug)) {\n  return { isValid: false, statusCode: 422, error: \"Validation error: 'website.slug' is required and must be a non-empty string.\" };\n}\nconst normalizedSlug = data.website.slug.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');\nif (!normalizedSlug) {\n  return { isValid: false, statusCode: 422, error: \"Validation error: 'website.slug' contains no valid alphanumeric characters.\" };\n}\nconst markdown = isNonEmptyString(data.website.bodyMarkdown)\n  ? data.website.bodyMarkdown.trim()\n  : isNonEmptyString(data.website.markdownContent)\n  ? data.website.markdownContent.trim()\n  : isNonEmptyString(data.website.markdown)\n  ? data.website.markdown.trim()\n  : '';\nif (!markdown) {\n  return { isValid: false, statusCode: 422, error: \"Validation error: 'website.bodyMarkdown' is required and must be a non-empty string.\" };\n}\nif (!isStringArray(data.website.tags)) {\n  return { isValid: false, statusCode: 422, error: \"Validation error: 'website.tags' must be an array of non-empty strings.\" };\n}\nconst website = {\n  title: data.website.title.trim(),\n  subtitle: subtitle,\n  excerpt: subtitle,\n  slug: normalizedSlug,\n  bodyMarkdown: markdown,\n  markdownContent: markdown,\n  tags: data.website.tags.map(t => t.trim())\n};\n\nconst generatedId = 'cp_' + Date.now().toString(36) + Math.random().toString(36).substring(2, 8);\n\nreturn {\n  isValid: true,\n  id: generatedId,\n  title: data.title.trim().slice(0, 255),\n  sourcePrompt: prev.sourcePrompt,\n  contentType: prev.contentType,\n  status: 'draft',\n  linkedinContent: JSON.stringify(linkedin),\n  newsletterContent: JSON.stringify(newsletter),\n  websiteContent: JSON.stringify(website),\n  targetChannels: JSON.stringify(prev.targetChannels),\n  metadata: JSON.stringify({\n    summary: data.summary.trim(),\n    generatedVia: 'n8n_gemini_agent',\n    generatedAt: new Date().toISOString()\n  })\n};"
       },
       "id": "6f181b52-7d08-4a9b-8309-16cd69b37d8c",
       "name": "Validate & Sanitize Generated Content",
@@ -124,7 +161,40 @@
       "typeVersion": 2,
       "position": [
         944,
-        688
+        576
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "check-gen-valid",
+              "leftValue": "={{ $json.isValid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-e5f6-47aa-8899-001122334455",
+      "name": "Check Generation Valid",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1168,
+        576
       ]
     },
     {
@@ -140,8 +210,8 @@
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
       "position": [
-        1168,
-        688
+        1392,
+        576
       ],
       "credentials": {
         "postgres": {
@@ -149,6 +219,7 @@
           "name": "Postgres account"
         }
       },
+      "alwaysOutputData": true,
       "onError": "continueErrorOutput"
     },
     {
@@ -160,8 +231,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1392,
-        688
+        1616,
+        576
       ]
     },
     {
@@ -177,24 +248,24 @@
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
       "position": [
-        1600,
-        688
+        1840,
+        576
       ]
     },
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT * FROM \"ContentPost\" WHERE \"id\" = trim($1::text) LIMIT 1;",
+        "query": "SELECT\n  p.*,\n  COALESCE(\n    (SELECT json_agg(l.*) FROM \"PublishingLog\" l WHERE l.\"postId\" = p.\"id\"),\n    '[]'::json\n  ) AS \"existingLogs\"\nFROM \"ContentPost\" p\nWHERE p.\"id\" = trim($1::text)\nLIMIT 1;",
         "options": {
           "queryReplacement": "={{ [$json.postId] }}"
         }
       },
       "id": "69a19c99-1fb5-4949-8066-63e3dec1c544",
-      "name": "Fetch Post from Postgres",
+      "name": "Fetch Post and Existing Logs from Postgres",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
       "position": [
-        720,
+        700,
         896
       ],
       "credentials": {
@@ -203,14 +274,15 @@
           "name": "Postgres account"
         }
       },
+      "alwaysOutputData": true,
       "onError": "continueErrorOutput"
     },
     {
       "parameters": {
-        "jsCode": "const post = $input.item.json;\nconst req = $('Route Action').first().json;\n\nif (!post || !post.id) {\n  return {\n    canPublish: false,\n    statusCode: 404,\n    error: 'Not Found: Content post with ID ' + req.postId + ' does not exist.'\n  };\n}\n\nif (post.status !== 'approved') {\n  return {\n    canPublish: false,\n    statusCode: 400,\n    error: 'Strict Invariant Violation: Content post cannot be published unless it has been explicitly approved by a human reviewer. Current status is \"' + post.status + '\".'\n  };\n}\n\nlet targetChannels = [];\nif (Array.isArray(req.channels) && req.channels.length > 0) {\n  targetChannels = req.channels;\n} else if (Array.isArray(post.targetChannels)) {\n  targetChannels = post.targetChannels;\n} else if (typeof post.targetChannels === 'string') {\n  try {\n    targetChannels = JSON.parse(post.targetChannels);\n  } catch (e) {\n    targetChannels = ['website', 'linkedin', 'newsletter'];\n  }\n} else {\n  targetChannels = ['website', 'linkedin', 'newsletter'];\n}\n\nconst logs = [];\nconst timestamp = Date.now();\n\nfor (const ch of targetChannels) {\n  const logId = 'log_' + timestamp.toString(36) + '_' + ch + '_' + Math.random().toString(36).substring(2, 6);\n  let publishedUrl = null;\n  let responsePayload = {};\n  \n  if (ch === 'website') {\n    let slug = 'announcement-' + timestamp;\n    try {\n      const web = JSON.parse(post.websiteContent || '{}');\n      if (web.slug) slug = web.slug;\n    } catch (e) {}\n    publishedUrl = 'https://impactcircles.org/news/' + slug;\n    responsePayload = { provider: 'Website CMS', slug, mode: 'live_synced' };\n  } else if (ch === 'linkedin') {\n    publishedUrl = 'https://www.linkedin.com/feed/update/urn:li:share:' + (timestamp + 1000000);\n    responsePayload = { provider: 'LinkedIn Marketing API', urn: 'urn:li:share:' + (timestamp + 1000000), mode: 'simulated_sandbox' };\n  } else if (ch === 'newsletter') {\n    publishedUrl = 'https://impactcircles.substack.com/p/digest-' + timestamp;\n    responsePayload = { provider: 'Newsletter Email Broadcast', campaignId: 'camp_' + timestamp, mode: 'simulated_sandbox' };\n  }\n\n  logs.push({\n    id: logId,\n    post_id: post.id,\n    postId: post.id,\n    channel: ch,\n    status: 'success',\n    published_url: publishedUrl,\n    publishedUrl,\n    response_payload: JSON.stringify(responsePayload),\n    responsePayload: JSON.stringify(responsePayload),\n    error_message: null,\n    errorMessage: null\n  });\n}\n\nreturn {\n  canPublish: true,\n  postId: post.id,\n  targetChannels,\n  logs,\n  logsJson: JSON.stringify(logs),\n  newStatus: 'published'\n};"
+        "jsCode": "const post = $input.item.json;\nconst req = $('Route Action').first().json;\n\nif (!post || !post.id) {\n  return {\n    canPublish: false,\n    statusCode: 404,\n    error: 'Not Found: Content post with ID ' + req.postId + ' does not exist.'\n  };\n}\n\nconst isApprovedForPublish =\n  (post.status === 'approved' ||\n    post.status === 'partially_published' ||\n    post.status === 'failed') &&\n  post.approvedAt !== null;\n\nif (!isApprovedForPublish) {\n  return {\n    canPublish: false,\n    statusCode: 400,\n    error: 'Strict Invariant Violation: Content post cannot be published unless it has been explicitly approved by a human reviewer. Current status is \"' + post.status + '\".'\n  };\n}\n\nconst SUPPORTED_CHANNELS = ['website', 'linkedin', 'newsletter'];\nlet approvedChannels = [];\nif (Array.isArray(post.targetChannels)) {\n  approvedChannels = post.targetChannels;\n} else if (typeof post.targetChannels === 'string') {\n  try {\n    const parsed = JSON.parse(post.targetChannels);\n    if (Array.isArray(parsed)) approvedChannels = parsed;\n  } catch (e) {\n    approvedChannels = ['website', 'linkedin', 'newsletter'];\n  }\n} else {\n  approvedChannels = ['website', 'linkedin', 'newsletter'];\n}\n\nlet channelsToPublish = approvedChannels;\n\nif (Array.isArray(req.channels) && req.channels.length > 0) {\n  for (const ch of req.channels) {\n    if (!SUPPORTED_CHANNELS.includes(ch)) {\n      return {\n        canPublish: false,\n        statusCode: 400,\n        error: `Invalid channel '${String(ch)}'. Supported channels are: website, linkedin, newsletter.`\n      };\n    }\n  }\n\n  const sortedApproved = [...new Set(approvedChannels)].sort();\n  const sortedRequested = [...new Set(req.channels)].sort();\n\n  if (post.status === 'approved') {\n    const matchesApproved =\n      sortedApproved.length === sortedRequested.length &&\n      sortedApproved.every((ch, i) => ch === sortedRequested[i]);\n\n    if (!matchesApproved) {\n      return {\n        canPublish: false,\n        statusCode: 400,\n        error: `Channel selection mismatch: Requested channels [${sortedRequested.join(', ')}] do not match the approved channel selection [${sortedApproved.join(', ')}]. Channel modifications require renewed approval before publication.`\n      };\n    }\n  } else {\n    const unapproved = sortedRequested.find(ch => !approvedChannels.includes(ch));\n    if (unapproved) {\n      return {\n        canPublish: false,\n        statusCode: 400,\n        error: `Channel selection mismatch: Requested channel '${unapproved}' is not part of the approved channel selection [${sortedApproved.join(', ')}]. Channel modifications require renewed approval before publication.`\n      };\n    }\n  }\n\n  channelsToPublish = sortedRequested;\n}\n\n// Deduplicate against existing successful logs\nconst alreadyPublishedLogs = [];\nconst existingLogs = Array.isArray(post.existingLogs) ? post.existingLogs : [];\nconst alreadyPublishedChannels = new Set();\n\nfor (const log of existingLogs) {\n  if (log.status === 'published' || log.status === 'success') {\n    alreadyPublishedChannels.add(log.channel);\n    alreadyPublishedLogs.push(log);\n  }\n}\n\nconst channelsToDispatch = channelsToPublish.filter(ch => !alreadyPublishedChannels.has(ch));\n\nreturn {\n  canPublish: true,\n  postId: post.id,\n  title: post.title,\n  approvedChannels,\n  channelsToPublish,\n  channelsToDispatch,\n  hasChannelsToDispatch: channelsToDispatch.length > 0,\n  alreadyPublishedLogs,\n  websiteContent: post.websiteContent,\n  linkedinContent: post.linkedinContent,\n  newsletterContent: post.newsletterContent\n};"
       },
       "id": "0a94a79f-2921-482a-a507-50a45551f061",
-      "name": "Verify Human Approval & Execute Dispatch",
+      "name": "Verify Human Approval & Prepare Channels",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
@@ -253,8 +325,107 @@
     },
     {
       "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "check-has-channels",
+              "leftValue": "={{ $json.hasChannelsToDispatch }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "e2d3c4b5-6677-48bb-9900-112233445566",
+      "name": "Check Channels to Dispatch",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1392,
+        896
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const prep = $input.item.json;\nconst channels = prep.channelsToDispatch || [];\nlet baseUrl = 'http://localhost:3000';\ntry {\n  baseUrl = ($env.SANDBOX_BASE_URL || 'http://localhost:3000').replace(/\\/+$/, '');\n} catch (e) {\n  baseUrl = 'http://localhost:3000';\n}\n\nconst items = [];\n\nlet web = {};\ntry { web = typeof prep.websiteContent === 'string' ? JSON.parse(prep.websiteContent) : (prep.websiteContent || {}); } catch(e) {}\nlet li = {};\ntry { li = typeof prep.linkedinContent === 'string' ? JSON.parse(prep.linkedinContent) : (prep.linkedinContent || {}); } catch(e) {}\nlet nl = {};\ntry { nl = typeof prep.newsletterContent === 'string' ? JSON.parse(prep.newsletterContent) : (prep.newsletterContent || {}); } catch(e) {}\n\nfor (const ch of channels) {\n  let endpointUrl = '';\n  let bodyData = {};\n\n  if (ch === 'website') {\n    endpointUrl = `${baseUrl}/api/sandbox/cms/posts`;\n    bodyData = {\n      title: web.title || prep.title,\n      slug: web.slug || ('post-' + prep.postId),\n      content: web.bodyMarkdown || web.markdownContent || '',\n      status: 'publish',\n      tags: Array.isArray(web.tags) ? web.tags : []\n    };\n  } else if (ch === 'linkedin') {\n    endpointUrl = `${baseUrl}/api/sandbox/linkedin/posts`;\n    bodyData = {\n      text: li.postText || li.content || prep.title,\n      hashtags: Array.isArray(li.hashtags) ? li.hashtags : []\n    };\n  } else if (ch === 'newsletter') {\n    endpointUrl = `${baseUrl}/api/sandbox/newsletter/send`;\n    bodyData = {\n      subject: nl.subject || prep.title,\n      preview: nl.previewText || nl.preview || '',\n      body: nl.bodyText || nl.body || '',\n      cta: nl.callToAction || nl.cta || ''\n    };\n  }\n\n  items.push({\n    json: {\n      postId: prep.postId,\n      channel: ch,\n      endpointUrl,\n      bodyData\n    }\n  });\n}\n\nreturn items;"
+      },
+      "id": "f3e4d5c6-7788-49cc-aa11-223344556677",
+      "name": "Format Dispatch Items",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1400,
+        1040
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.endpointUrl }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + ($env.SANDBOX_API_KEY || 'sandbox_demo_secret_key') }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.bodyData) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          },
+          "timeout": 10000
+        }
+      },
+      "id": "a4b5c6d7-8899-4add-bb22-334455667788",
+      "name": "Dispatch Channel to Sandbox API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1640,
+        1040
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst prepNode = $('Verify Human Approval & Prepare Channels').first().json;\nconst approvedChannels = prepNode.approvedChannels || ['website', 'linkedin', 'newsletter'];\nconst alreadyPublishedLogs = prepNode.alreadyPublishedLogs || [];\nconst postId = prepNode.postId;\n\nconst newLogs = [];\nconst successfulChannelNames = new Set();\n\nfor (const log of alreadyPublishedLogs) {\n  if (log.status === 'published' || log.status === 'success') {\n    successfulChannelNames.add(log.channel);\n  }\n}\n\nif (prepNode.hasChannelsToDispatch) {\n  for (let i = 0; i < items.length; i++) {\n    const item = items[i].json;\n    let dispatchMeta = {};\n    try {\n      dispatchMeta = $('Format Dispatch Items').itemMatching(i).json;\n    } catch (e) {\n      dispatchMeta = item;\n    }\n\n    const channel = dispatchMeta.channel;\n    if (!channel) continue;\n\n    const statusCode = Number(item.statusCode || (item.error ? 500 : 200));\n    const isSuccess = statusCode >= 200 && statusCode < 300;\n\n    let responseBody = item.body;\n    if (typeof responseBody === 'string') {\n      try { responseBody = JSON.parse(responseBody); } catch (e) {}\n    }\n\n    let publishedUrl = null;\n    let errorMessage = null;\n\n    if (isSuccess) {\n      successfulChannelNames.add(channel);\n      publishedUrl = responseBody?.link || responseBody?.url || responseBody?.shareUrl || null;\n    } else {\n      const errorText = (typeof responseBody === 'object' && responseBody?.error)\n        ? responseBody.error\n        : (item.error?.message || item.statusMessage || String(responseBody || 'Dispatch failed'));\n      errorMessage = `${channel.toUpperCase()} API responded with ${statusCode}: ${errorText}`;\n    }\n\n    const logId = 'log_' + Date.now().toString(36) + '_' + channel + '_' + Math.random().toString(36).substring(2, 6);\n\n    newLogs.push({\n      id: logId,\n      post_id: postId,\n      postId: postId,\n      channel: channel,\n      status: isSuccess ? 'published' : 'failed',\n      published_url: publishedUrl,\n      publishedUrl: publishedUrl,\n      response_payload: JSON.stringify(responseBody || {}),\n      responsePayload: JSON.stringify(responseBody || {}),\n      error_message: errorMessage,\n      errorMessage: errorMessage\n    });\n  }\n}\n\nconst allApprovedSuccess = approvedChannels.every(ch => successfulChannelNames.has(ch));\nconst anyApprovedSuccess = approvedChannels.some(ch => successfulChannelNames.has(ch));\n\nlet newStatus = 'failed';\nif (allApprovedSuccess) {\n  newStatus = 'published';\n} else if (anyApprovedSuccess) {\n  newStatus = 'partially_published';\n} else {\n  newStatus = 'failed';\n}\n\nreturn {\n  success: anyApprovedSuccess,\n  postId,\n  newStatus,\n  logs: newLogs,\n  logsJson: JSON.stringify(newLogs),\n  hasNewLogs: newLogs.length > 0,\n  publishedChannels: Array.from(successfulChannelNames)\n};"
+      },
+      "id": "b5c6d7e8-99aa-4bee-cc33-445566778899",
+      "name": "Aggregate Outcomes & Finalize Status",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1860,
+        896
+      ]
+    },
+    {
+      "parameters": {
         "operation": "executeQuery",
-        "query": "INSERT INTO \"PublishingLog\" (\n  \"id\",\n  \"postId\",\n  \"channel\",\n  \"status\",\n  \"publishedUrl\",\n  \"responsePayload\",\n  \"errorMessage\",\n  \"createdAt\"\n)\nSELECT\n  x.id,\n  x.post_id,\n  x.channel,\n  x.status,\n  x.published_url,\n  x.response_payload::jsonb,\n  x.error_message,\n  NOW()\nFROM json_to_recordset($1::json) AS x(\n  id text,\n  post_id text,\n  channel text,\n  status text,\n  published_url text,\n  response_payload text,\n  error_message text\n)\nRETURNING *;",
+        "query": "INSERT INTO \"PublishingLog\" (\n  \"id\",\n  \"postId\",\n  \"channel\",\n  \"status\",\n  \"publishedUrl\",\n  \"responsePayload\",\n  \"errorMessage\",\n  \"createdAt\"\n)\nSELECT\n  x.id,\n  x.post_id,\n  x.channel,\n  x.status,\n  x.published_url,\n  NULLIF(x.response_payload, '')::jsonb,\n  x.error_message,\n  NOW()\nFROM json_to_recordset($1::json) AS x(\n  id text,\n  post_id text,\n  channel text,\n  status text,\n  published_url text,\n  response_payload text,\n  error_message text\n)\nRETURNING *;",
         "options": {
           "queryReplacement": "={{ [$json.logsJson] }}"
         }
@@ -264,7 +435,7 @@
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
       "position": [
-        1392,
+        2080,
         896
       ],
       "credentials": {
@@ -273,14 +444,15 @@
           "name": "Postgres account"
         }
       },
+      "alwaysOutputData": true,
       "onError": "continueErrorOutput"
     },
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "UPDATE \"ContentPost\"\nSET \"status\" = $2, \"publishedAt\" = NOW(), \"updatedAt\" = NOW()\nWHERE \"id\" = $1\nRETURNING *;",
+        "query": "UPDATE \"ContentPost\"\nSET\n  \"status\" = $2,\n  \"publishedAt\" = CASE\n    WHEN $2 = 'published' THEN NOW()\n    WHEN $2 = 'partially_published' AND \"publishedAt\" IS NULL THEN NOW()\n    ELSE \"publishedAt\"\n  END,\n  \"updatedAt\" = NOW()\nWHERE \"id\" = $1\nRETURNING *;",
         "options": {
-          "queryReplacement": "={{ [$('Verify Human Approval & Execute Dispatch').first().json.postId, $('Verify Human Approval & Execute Dispatch').first().json.newStatus || 'published'] }}"
+          "queryReplacement": "={{ [$('Aggregate Outcomes & Finalize Status').first().json.postId, $('Aggregate Outcomes & Finalize Status').first().json.newStatus || 'published'] }}"
         }
       },
       "id": "8d6d5280-ff02-45a0-b842-1e229d7b470d",
@@ -288,7 +460,7 @@
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
       "position": [
-        1600,
+        2300,
         896
       ],
       "credentials": {
@@ -297,19 +469,20 @@
           "name": "Postgres account"
         }
       },
+      "alwaysOutputData": true,
       "onError": "continueErrorOutput",
       "executeOnce": true
     },
     {
       "parameters": {
-        "jsCode": "const updatedPost = $input.item.json;\nconst prev = $('Verify Human Approval & Execute Dispatch').first().json;\n\nreturn {\n  success: true,\n  postId: prev.postId,\n  status: updatedPost.status || 'published',\n  publishedChannels: prev.targetChannels,\n  logs: prev.logs\n};"
+        "jsCode": "const updatedPost = $input.item.json;\nconst outcomes = $('Aggregate Outcomes & Finalize Status').first().json;\n\nreturn {\n  success: true,\n  postId: outcomes.postId,\n  status: updatedPost?.status || outcomes.newStatus || 'published',\n  publishedChannels: outcomes.publishedChannels,\n  logs: outcomes.logs\n};"
       },
       "id": "9c39a459-2389-4ebb-a925-c3a1057a11bd",
       "name": "Format Publishing Success",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1824,
+        2520,
         896
       ]
     },
@@ -326,7 +499,7 @@
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
       "position": [
-        2048,
+        2740,
         896
       ]
     },
@@ -340,7 +513,7 @@
       "typeVersion": 2,
       "position": [
         944,
-        1072
+        736
       ]
     },
     {
@@ -353,47 +526,8 @@
       "typeVersion": 2,
       "position": [
         1392,
-        1072
-      ]
-    },
-    {
-      "parameters": {
-        "promptType": "define",
-        "text": "=Generate publication content using the following input:\n\nInput type: {{ $json.contentType }}\nContent prompt: {{ $json.sourcePrompt }}\nAdditional guidelines: {{ $json.additionalInstructions || 'None' }}",
-        "options": {
-          "systemMessage": "You are the Content Publishing Agent for Impact Circles. Transform the supplied source input into 3 polished publication formats: LinkedIn, Newsletter, and Website Announcement.\n\nReturn ONLY valid JSON. Do not include Markdown code fences or explanatory text.\n\nUse exactly this schema:\n{\n  \"title\": \"Punchy engaging title\",\n  \"summary\": \"1-2 sentence executive briefing\",\n  \"linkedin\": {\n    \"postText\": \"Engaging LinkedIn post formatted with a hook, bullet insights, and call to action\",\n    \"hashtags\": [\"#ImpactCircles\", \"#Innovation\", \"#Sustainability\"],\n    \"characterCount\": 800\n  },\n  \"newsletter\": {\n    \"subject\": \"Newsletter subject line\",\n    \"previewText\": \"Brief preheader teaser text\",\n    \"bodyText\": \"Structured briefing for community newsletter with sections and key takeaways\",\n    \"callToAction\": \"Primary action link or prompt\"\n  },\n  \"website\": {\n    \"title\": \"Full article title\",\n    \"subtitle\": \"Informative subheading or dek explaining the impact\",\n    \"slug\": \"kebab-case-slug\",\n    \"bodyMarkdown\": \"Complete article in GitHub Flavored Markdown with headings and structured paragraphs\",\n    \"tags\": [\"Tag1\", \"Tag2\"]\n  }\n}\n\nRequirements:\n- Generate all three publication formats from the same source.\n- Follow the supplied additional guidelines.\n- Use accurate, relevant content and do not invent unsupported facts.\n- Ensure every required field is present and uses the correct data type.\n- Ensure the website slug is lowercase and uses hyphens."
-        }
-      },
-      "id": "7109cbca-5368-40ba-a571-22b6c9e8413e",
-      "name": "AI Agent1",
-      "type": "@n8n/n8n-nodes-langchain.agent",
-      "typeVersion": 3.1,
-      "position": [
-        624,
-        576
-      ]
-    },
-    {
-      "parameters": {
-        "modelName": "models/gemini-3.5-flash-lite",
-        "options": {
-          "temperature": 0.4
-        }
-      },
-      "id": "5368fafd-1833-46f0-8a6a-d4214cac512d",
-      "name": "Google Gemini Chat Model1",
-      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
-      "typeVersion": 1.1,
-      "position": [
-        640,
         736
-      ],
-      "credentials": {
-        "googlePalmApi": {
-          "id": "22Sgy2HIizO5l1od",
-          "name": "Google Gemini(PaLM) Api account"
-        }
-      }
+      ]
     }
   ],
   "connections": {
@@ -448,7 +582,36 @@
         ],
         [
           {
-            "node": "Fetch Post from Postgres",
+            "node": "Fetch Post and Existing Logs from Postgres",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent1",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent1": {
+      "main": [
+        [
+          {
+            "node": "Validate & Sanitize Generated Content",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format Gemini Error",
             "type": "main",
             "index": 0
           }
@@ -459,7 +622,25 @@
       "main": [
         [
           {
+            "node": "Check Generation Valid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Generation Valid": {
+      "main": [
+        [
+          {
             "node": "Persist Content Draft in Postgres",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond with Error",
             "type": "main",
             "index": 0
           }
@@ -495,11 +676,11 @@
         ]
       ]
     },
-    "Fetch Post from Postgres": {
+    "Fetch Post and Existing Logs from Postgres": {
       "main": [
         [
           {
-            "node": "Verify Human Approval & Execute Dispatch",
+            "node": "Verify Human Approval & Prepare Channels",
             "type": "main",
             "index": 0
           }
@@ -513,7 +694,7 @@
         ]
       ]
     },
-    "Verify Human Approval & Execute Dispatch": {
+    "Verify Human Approval & Prepare Channels": {
       "main": [
         [
           {
@@ -528,7 +709,7 @@
       "main": [
         [
           {
-            "node": "Persist Publishing Logs in Postgres",
+            "node": "Check Channels to Dispatch",
             "type": "main",
             "index": 0
           }
@@ -536,6 +717,57 @@
         [
           {
             "node": "Respond with Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Channels to Dispatch": {
+      "main": [
+        [
+          {
+            "node": "Format Dispatch Items",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Aggregate Outcomes & Finalize Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Dispatch Items": {
+      "main": [
+        [
+          {
+            "node": "Dispatch Channel to Sandbox API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dispatch Channel to Sandbox API": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Outcomes & Finalize Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Outcomes & Finalize Status": {
+      "main": [
+        [
+          {
+            "node": "Persist Publishing Logs in Postgres",
             "type": "main",
             "index": 0
           }
@@ -610,31 +842,6 @@
           }
         ]
       ]
-    },
-    "Google Gemini Chat Model1": {
-      "ai_languageModel": [
-        [
-          {
-            "node": "AI Agent1",
-            "type": "ai_languageModel",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "AI Agent1": {
-      "main": [
-        [
-          {
-            "node": "Validate & Sanitize Generated Content",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
     }
-  },
-  "settings": {
-    "executionOrder": "v1"
   }
 }

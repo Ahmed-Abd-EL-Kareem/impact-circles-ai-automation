@@ -22,16 +22,23 @@ A full-stack vertical slice demonstration for intelligent financial document ing
     │                          [Expense Ledger, Category Breakdown & CSV Export]
     │
     └─► Prompt / Generate   ──► [POST /api/content]
-                                      │ (Drafts 3 channels: Website CMS, LinkedIn, Newsletter)
+                                      │
+                                      ├─► [n8n Webhook (action: generate) / Direct Engine Fallback]
+                                      │     ├─► Google Gemini API (Tailored 3-format generation)
+                                      │     ├─► Schema Validation Guardrail (Non-empty fields)
+                                      │     └─► Neon PostgreSQL (Persist Draft Post)
                                       ▼
                                 [Human Review & Passcode Guard]
                                       │ (Server-enforced approval; edits reset to in_review)
                                       ▼
                                 [POST /api/content/[id]/publish]
-                                      │ (Real HTTP fetch with Bearer auth to Sandbox)
-                                      ├─► POST /api/sandbox/cms/posts        ──► /sandbox/news/[slug]
-                                      ├─► POST /api/sandbox/linkedin/posts   ──► /sandbox/linkedin/[id]
-                                      └─► POST /api/sandbox/newsletter/send  ──► /sandbox/newsletter/[id]
+                                      │
+                                      ├─► [n8n Webhook (action: publish) / Direct Publishing Fallback]
+                                      │     │ (Approval & Channel Selection Guardrail)
+                                      │     ├─► POST /api/sandbox/cms/posts        ──► /sandbox/news/[slug]
+                                      │     ├─► POST /api/sandbox/linkedin/posts   ──► /sandbox/linkedin/[id]
+                                      │     ├─► POST /api/sandbox/newsletter/send  ──► /sandbox/newsletter/[id]
+                                      │     └─► Neon PostgreSQL (PublishingLog Audit & Post Status)
 ```
 
 ---
@@ -42,7 +49,7 @@ A full-stack vertical slice demonstration for intelligent financial document ing
 - **Database & ORM**: PostgreSQL on Neon with connection pooling via Prisma 7 (`@prisma/adapter-pg`).
 - **AI Multimodal Extraction & Generation**: Google Gemini API (`gemini-flash-latest` / `gemini-3.1-flash-lite`).
 - **Workflow Automation**: n8n workflow orchestration with direct pipeline fallback when n8n is offline.
-- **Verification**: Node.js native test runner (89 passing unit tests across 12 suites).
+- **Verification**: Node.js native test runner (124 passing unit tests across 17 suites).
 
 ---
 
@@ -124,11 +131,16 @@ The application functions completely out-of-the-box using the built-in direct pi
    # docker run -it --rm --name n8n -p 5678:5678 -v ~/.n8n:/home/node/.n8n n8nio/n8n
    ```
 2. Open `http://localhost:5678` in your browser.
-3. In `.env`, uncomment the local n8n URLs (`http://localhost:5678/...`).
+3. In `.env`, uncomment the local n8n URLs (`http://localhost:5678/...`) and set `N8N_WEBHOOK_SECRET`.
+4. If running locally with SQLite (`~/.n8n/database.sqlite`), synchronize both workflows automatically:
+   ```bash
+   npm run workflow:sync
+   ```
 
-#### Option B: Connect to n8n Cloud
+#### Option B: Connect to n8n Cloud / Hosted n8n
 1. Create or log in to your [n8n Cloud](https://n8n.io/cloud/) workspace (e.g. `https://your-instance.app.n8n.cloud`).
 2. In `.env`, set `N8N_BASE_URL`, `N8N_WEBHOOK_URL`, and `N8N_CONTENT_WEBHOOK_URL` to your cloud endpoints.
+3. **Reachable Sandbox Base URL**: Since a hosted n8n instance cannot reach `http://localhost:3000` directly, expose your local Next.js instance via a tunnel (e.g. Cloudflare Tunnel or `ngrok http 3000`), then configure `SANDBOX_BASE_URL="https://your-tunnel.ngrok-free.app"` in the hosted n8n environment variables so HTTP dispatch nodes can reach `/api/sandbox/*`.
 
 #### Import & Activate Workflows (Local or Cloud)
 1. In n8n, navigate to **Workflows** → **Import from File**:
@@ -137,8 +149,9 @@ The application functions completely out-of-the-box using the built-in direct pi
 2. Configure Credentials:
    - **Neon Postgres**: Create a Postgres credential pointing to your Neon database URL (Host, Database, User, Password, Port 5432, SSL `require`).
    - **Google Gemini API**: Create a Gemini API credential using your `GEMINI_API_KEY`.
-3. Set `N8N_WEBHOOK_SECRET` in your n8n environment variables to match your `.env`.
-4. Toggle both workflows to **Active**. Next.js will automatically delegate tasks to n8n, falling back to the direct pipeline if n8n is ever offline.
+3. Set `N8N_WEBHOOK_SECRET` in your n8n environment variables to match your `.env` (both workflows fail closed if this is unset or mismatched).
+4. Configure `SANDBOX_BASE_URL` (default `http://localhost:3000` or reachable URL) and `SANDBOX_API_KEY` (default `sandbox_demo_secret_key`) in n8n.
+5. Toggle both workflows to **Active**. Next.js will automatically delegate tasks to n8n, falling back to the direct pipeline if n8n is ever offline.
 
 ---
 
@@ -205,7 +218,7 @@ npx tsc --noEmit
 # Linting
 npm run lint
 
-# Automated unit tests (89 passing tests across 12 suites)
+# Automated unit tests (124 passing tests across 17 suites)
 npm test
 
 # Production build verification

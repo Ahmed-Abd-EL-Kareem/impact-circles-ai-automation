@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
@@ -7,6 +8,14 @@ interface PageProps {
 }
 
 export const instant = false;
+
+export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
+  const { id } = await params;
+  return {
+    title: `Newsletter Broadcast: ${decodeURIComponent(id).slice(0, 30)} • Sandbox`,
+    description: "Mock newsletter broadcast publication record.",
+  };
+}
 
 export default async function SandboxNewsletterPage({ params }: PageProps) {
   const { id } = await params;

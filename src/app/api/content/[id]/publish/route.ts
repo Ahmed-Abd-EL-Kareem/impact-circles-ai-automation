@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { revalidatePath } from "next/cache";
 import { publishContentPost, SUPPORTED_CHANNELS } from "@/lib/services/publishing";
 import { verifyReviewerPasscode } from "@/lib/services/reviewer-auth";
 import { dispatchContentToN8nWorkflow } from "@/lib/services/workflow-client";
@@ -81,6 +82,10 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
         },
       });
 
+      try {
+        revalidatePath("/sandbox");
+      } catch {}
+
       return NextResponse.json({
         success: true,
         message: "Automated publishing dispatch completed for selected channels via n8n.",
@@ -119,6 +124,10 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
         { status: isClientError ? 400 : 502 }
       );
     }
+
+    try {
+      revalidatePath("/sandbox");
+    } catch {}
 
     return NextResponse.json({
       success: true,
