@@ -19,7 +19,10 @@ function parseLinkedin(post: ContentPostRecord): { text: string; hashtags: strin
   if (!post.linkedinContent) return { text: "", hashtags: [] };
   try {
     const parsed = JSON.parse(post.linkedinContent);
-    return { text: parsed.postText || "", hashtags: parsed.hashtags || [] };
+    return {
+      text: parsed.postText || parsed.content || "",
+      hashtags: parsed.hashtags || [],
+    };
   } catch {
     return { text: post.linkedinContent, hashtags: [] };
   }
@@ -31,9 +34,9 @@ function parseNewsletter(post: ContentPostRecord): { subject: string; preview: s
     const parsed = JSON.parse(post.newsletterContent);
     return {
       subject: parsed.subject || post.title,
-      preview: parsed.previewText || "",
-      body: parsed.bodyText || "",
-      cta: parsed.callToAction || "",
+      preview: parsed.previewText || parsed.preview || parsed.summary || "",
+      body: parsed.bodyText || parsed.body || parsed.summary || "",
+      cta: parsed.callToAction || parsed.cta || "",
     };
   } catch {
     return { subject: post.title, preview: "", body: post.newsletterContent, cta: "" };
@@ -46,9 +49,9 @@ function parseWebsite(post: ContentPostRecord): { title: string; subtitle: strin
     const parsed = JSON.parse(post.websiteContent);
     return {
       title: parsed.title || post.title,
-      subtitle: parsed.subtitle || "",
+      subtitle: parsed.subtitle || parsed.excerpt || "",
       slug: parsed.slug || "",
-      markdown: parsed.bodyMarkdown || "",
+      markdown: parsed.bodyMarkdown || parsed.markdownContent || parsed.markdown || "",
     };
   } catch {
     return { title: post.title, subtitle: "", slug: "", markdown: post.websiteContent };
@@ -732,22 +735,27 @@ export function ContentReviewModal({
                               : log.status}
                           </span>
                         </div>
-                        {log.publishedUrl && (
-                          <div className="mt-1 flex flex-wrap items-center gap-2">
-                            <a
-                              href={log.publishedUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="font-mono text-[11px] text-emerald-600 dark:text-emerald-400 hover:underline font-medium flex items-center gap-1 select-all"
-                            >
-                              <span>{log.publishedUrl}</span>
-                              <span className="text-[10px]">↗</span>
-                            </a>
-                            <span className="rounded bg-emerald-100/70 px-1.5 py-0.5 text-[10px] font-medium text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300">
-                              Sandbox View
-                            </span>
-                          </div>
-                        )}
+                        {log.publishedUrl && (() => {
+                          const cleanUrl = log.publishedUrl
+                            .replace("http://127.0.0.1:3001", "http://localhost:3000")
+                            .replace("http://localhost:3001", "http://localhost:3000");
+                          return (
+                            <div className="mt-1 flex flex-wrap items-center gap-2">
+                              <a
+                                href={cleanUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="font-mono text-[11px] text-emerald-600 dark:text-emerald-400 hover:underline font-medium flex items-center gap-1 select-all"
+                              >
+                                <span>{cleanUrl}</span>
+                                <span className="text-[10px]">↗</span>
+                              </a>
+                              <span className="rounded bg-emerald-100/70 px-1.5 py-0.5 text-[10px] font-medium text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300">
+                                Sandbox View
+                              </span>
+                            </div>
+                          );
+                        })()}
                         {log.errorMessage && (
                           <p className="mt-1 text-xs text-rose-600 dark:text-rose-400">
                             Error: {log.errorMessage}

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { generateContentWithGemini } from "@/lib/content/gemini-content";
+import { dispatchContentToN8nWorkflow } from "@/lib/services/workflow-client";
 import { ContentKind, ContentStatus } from "@/lib/types/content";
 import { Prisma } from "@prisma/client";
 
@@ -12,7 +13,7 @@ export async function GET(req: NextRequest) {
   try {
     const searchParams = req.nextUrl.searchParams;
     const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10) || 1);
-    const limit = Math.min(50, Math.max(1, parseInt(searchParams.get("limit") || "10", 10) || 10));
+    const limit = Math.min(100, Math.max(1, parseInt(searchParams.get("limit") || "50", 10) || 50));
     const status = searchParams.get("status") as ContentStatus | null;
     const contentType = searchParams.get("type") as ContentKind | null;
     const search = searchParams.get("search")?.trim() || "";
@@ -41,21 +42,26 @@ export async function GET(req: NextRequest) {
 
     const skip = (page - 1) * limit;
 
-    const [total, posts] = await Promise.all([
-      prisma.contentPost.count({ where }),
-      prisma.contentPost.findMany({
-        where,
-        orderBy: { createdAt: "desc" },
-        skip,
-        take: limit,
-        include: {
-          publishingLogs: {
-            orderBy: { createdAt: "desc" },
-            take: 10,
+    const [totalMatching, totalGlobal, draftCount, approvedCount, publishedCount, posts] =
+      await Promise.all([
+        prisma.contentPost.count({ where }),
+        prisma.contentPost.count(),
+        prisma.contentPost.count({ where: { status: { in: ["draft", "in_review"] } } }),
+        prisma.contentPost.count({ where: { status: "approved" } }),
+        prisma.contentPost.count({ where: { status: { in: ["published", "partially_published"] } } }),
+        prisma.contentPost.findMany({
+          where,
+          orderBy: { createdAt: "desc" },
+          skip,
+          take: limit,
+          include: {
+            publishingLogs: {
+              orderBy: { createdAt: "desc" },
+              take: 10,
+            },
           },
-        },
-      }),
-    ]);
+        }),
+      ]);
 
     const formattedPosts = posts.map((p) => ({
       id: p.id,
@@ -89,16 +95,29 @@ export async function GET(req: NextRequest) {
       })),
     }));
 
-    return NextResponse.json({
-      success: true,
-      data: formattedPosts,
-      pagination: {
-        page,
-        limit,
-        total,
-        totalPages: Math.ceil(total / limit) || 1,
+    return NextResponse.json(
+      {
+        success: true,
+        data: formattedPosts,
+        pagination: {
+          page,
+          limit,
+          total: totalMatching,
+          totalPages: Math.ceil(totalMatching / limit) || 1,
+        },
+        counts: {
+          total: totalGlobal,
+          draft: draftCount,
+          approved: approvedCount,
+          published: publishedCount,
+        },
       },
-    });
+      {
+        headers: {
+          "Cache-Control": "private, no-cache, stale-while-revalidate=30",
+        },
+      }
+    );
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Internal server error";
     return NextResponse.json(
@@ -169,7 +188,38 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Call Gemini AI Generation Service
+    // 1. Dispatch to n8n orchestration workflow if N8N_CONTENT_WEBHOOK_URL is configured
+    if (process.env.N8N_CONTENT_WEBHOOK_URL) {
+      const n8nResult = await dispatchContentToN8nWorkflow({
+        action: "generate",
+        sourcePrompt: promptText,
+        contentType,
+        additionalInstructions,
+        targetChannels,
+      });
+
+      if (!n8nResult.success) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: n8nResult.error,
+          },
+          { status: n8nResult.statusCode || 502 }
+        );
+      }
+
+      // If n8n created the post, return the persisted post record
+      const postRecord = n8nResult.post || n8nResult.data?.post;
+      return NextResponse.json(
+        {
+          success: true,
+          post: postRecord,
+        },
+        { status: 201 }
+      );
+    }
+
+    // 2. Direct Gemini AI Generation Service fallback
     const aiResult = await generateContentWithGemini(promptText, contentType, additionalInstructions);
 
     if (!aiResult.success) {

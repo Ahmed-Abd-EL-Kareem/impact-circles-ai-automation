@@ -3,6 +3,30 @@ import { prisma } from "@/lib/db";
 
 export const instant = false;
 
+function getCleanSandboxHref(pub: { channel: string; slug: string | null; externalId: string; url: string }): string {
+  if (pub.url) {
+    try {
+      if (pub.url.startsWith("http://") || pub.url.startsWith("https://")) {
+        const u = new URL(pub.url);
+        if (u.pathname.startsWith("/sandbox")) {
+          return u.pathname;
+        }
+      }
+    } catch {}
+  }
+  const ch = pub.channel === "website" ? "news" : pub.channel;
+  const target = pub.slug || pub.externalId;
+  return `/sandbox/${ch}/${encodeURIComponent(target)}`;
+}
+
+function getDisplayUrl(rawUrl: string, pub: { channel: string; slug: string | null; externalId: string }): string {
+  if (!rawUrl) {
+    const ch = pub.channel === "website" ? "news" : pub.channel;
+    return `http://localhost:3000/sandbox/${ch}/${encodeURIComponent(pub.slug || pub.externalId)}`;
+  }
+  return rawUrl.replace(/http:\/\/(127\.0\.0\.1|localhost):3001/, "http://localhost:3000");
+}
+
 export default async function SandboxIndexPage() {
   const publications = await prisma.sandboxPublication.findMany({
     orderBy: { createdAt: "desc" },
@@ -89,7 +113,7 @@ export default async function SandboxIndexPage() {
                       {pub.title}
                     </h3>
                     <p className="font-mono text-[11px] text-zinc-500 dark:text-zinc-400 truncate max-w-md">
-                      {pub.url}
+                      {getDisplayUrl(pub.url, pub)}
                     </p>
                   </div>
                   <div className="flex items-center gap-3">
@@ -97,7 +121,7 @@ export default async function SandboxIndexPage() {
                       {new Date(pub.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                     </span>
                     <a
-                      href={pub.url}
+                      href={getCleanSandboxHref(pub)}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="text-xs font-semibold px-3 py-1.5 rounded-xl bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 hover:opacity-90 transition-opacity"

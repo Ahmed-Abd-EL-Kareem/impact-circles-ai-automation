@@ -93,10 +93,17 @@ export async function GET() {
       byCategoryAndCurrency,
     };
 
-    return NextResponse.json({
-      success: true,
-      data: summary,
-    });
+    return NextResponse.json(
+      {
+        success: true,
+        data: summary,
+      },
+      {
+        headers: {
+          "Cache-Control": "private, no-cache, stale-while-revalidate=30",
+        },
+      }
+    );
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to generate summary";
     return NextResponse.json(

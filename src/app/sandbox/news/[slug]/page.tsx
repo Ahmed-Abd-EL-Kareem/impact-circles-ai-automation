@@ -6,16 +6,23 @@ interface PageProps {
   params: Promise<{ slug: string }>;
 }
 
-
 export const instant = false;
 
 export default async function SandboxNewsPage({ params }: PageProps) {
   const { slug } = await params;
+  const decodedSlug = decodeURIComponent(slug);
 
   const publication = await prisma.sandboxPublication.findFirst({
     where: {
       channel: "website",
-      OR: [{ slug }, { externalId: slug }, { id: slug }],
+      OR: [
+        { slug: decodedSlug },
+        { slug },
+        { externalId: decodedSlug },
+        { externalId: slug },
+        { id: decodedSlug },
+        { id: slug },
+      ],
     },
     orderBy: { createdAt: "desc" },
   });

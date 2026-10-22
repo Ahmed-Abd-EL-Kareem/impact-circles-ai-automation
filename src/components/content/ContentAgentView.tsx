@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { ContentGeneratorForm } from "./ContentGeneratorForm";
 import { ContentReviewModal } from "./ContentReviewModal";
 import { ContentPostRecord, ContentStatus } from "@/lib/types/content";
@@ -13,51 +13,128 @@ export function ContentAgentView() {
   const [selectedPost, setSelectedPost] = useState<ContentPostRecord | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let ignore = false;
+  // Pagination & Counts
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalMatching, setTotalMatching] = useState(0);
+  const pageSize = 6;
 
-    async function loadData() {
-      try {
-        const params = new URLSearchParams();
-        if (filterStatus !== "all") params.set("status", filterStatus);
-        if (searchQuery.trim()) params.set("search", searchQuery.trim());
-
-        const res = await fetch(`/api/content?${params.toString()}`);
-        const data = await res.json();
-
-        if (ignore) return;
-
-        if (data.success) {
-          setPosts(data.data);
-        } else {
-          setError(data.error || "Failed to fetch content packages.");
-        }
-      } catch (err: unknown) {
-        if (!ignore) {
-          setError(err instanceof Error ? err.message : "Network error");
-        }
-      } finally {
-        if (!ignore) {
-          setIsLoading(false);
-        }
+  // In-memory page cache (SWR)
+  const contentCacheRef = useRef<
+    Map<
+      string,
+      {
+        data: ContentPostRecord[];
+        totalPages: number;
+        total: number;
+        counts: { total: number; draft: number; approved: number; published: number };
       }
+    >
+  >(new Map());
+
+  const [counts, setCounts] = useState<{
+    total: number;
+    draft: number;
+    approved: number;
+    published: number;
+  }>({ total: 0, draft: 0, approved: 0, published: 0 });
+
+  const loadData = async (pageToLoad = currentPage, ignoreCheck?: () => boolean) => {
+    const cacheKey = `${pageToLoad}_${filterStatus}_${searchQuery.trim()}`;
+    const cached = contentCacheRef.current.get(cacheKey);
+
+    if (cached) {
+      setPosts(cached.data);
+      setTotalPages(cached.totalPages);
+      setTotalMatching(cached.total);
+      setCounts(cached.counts);
+      setIsLoading(false);
+    } else {
+      setIsLoading(true);
     }
 
-    loadData();
+    try {
+      const params = new URLSearchParams();
+      params.set("page", String(pageToLoad));
+      params.set("limit", String(pageSize));
+      if (filterStatus !== "all") params.set("status", filterStatus);
+      if (searchQuery.trim()) params.set("search", searchQuery.trim());
+
+      const res = await fetch(`/api/content?${params.toString()}`);
+      const data = await res.json();
+
+      if (ignoreCheck && ignoreCheck()) return;
+
+      if (data.success) {
+        setPosts(data.data);
+        const pages = data.pagination?.totalPages || 1;
+        const total = data.pagination?.total ?? data.data.length;
+        setTotalPages(pages);
+        setTotalMatching(total);
+
+        let latestCounts = counts;
+        if (data.counts) {
+          latestCounts = data.counts;
+          setCounts(data.counts);
+        } else if (data.pagination) {
+          latestCounts = { ...counts, total };
+          setCounts(latestCounts);
+        }
+
+        contentCacheRef.current.set(cacheKey, {
+          data: data.data,
+          totalPages: pages,
+          total,
+          counts: latestCounts,
+        });
+      } else {
+        setError(data.error || "Failed to fetch content packages.");
+      }
+    } catch (err: unknown) {
+      if (!ignoreCheck || !ignoreCheck()) {
+        setError(err instanceof Error ? err.message : "Network error");
+      }
+    } finally {
+      if (!ignoreCheck || !ignoreCheck()) {
+        setIsLoading(false);
+      }
+    }
+  };
+
+  useEffect(() => {
+    let ignore = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setCurrentPage(1);
+    loadData(1, () => ignore);
 
     return () => {
       ignore = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filterStatus, searchQuery]);
 
+  const handlePageChange = (newPage: number) => {
+    if (newPage < 1 || newPage > totalPages || newPage === currentPage) return;
+    setCurrentPage(newPage);
+    loadData(newPage);
+  };
+
   const handleGeneratedSuccess = (newPost: ContentPostRecord) => {
-    setPosts((prev) => [newPost, ...prev]);
+    contentCacheRef.current.clear();
+    setPosts((prev) => {
+      const filtered = prev.filter((p) => p.id !== newPost.id);
+      return [newPost, ...filtered];
+    });
     setSelectedPost(newPost); // automatically open review modal for immediate human review
+    setCurrentPage(1);
+    loadData(1);
   };
 
   const handlePostUpdated = (updated: ContentPostRecord) => {
+    contentCacheRef.current.clear();
     setPosts((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
     setSelectedPost(updated);
+    loadData(currentPage);
   };
 
   const handleDeletePost = async (id: string, e: React.MouseEvent) => {
@@ -67,18 +144,21 @@ export function ContentAgentView() {
     try {
       const res = await fetch(`/api/content/${id}`, { method: "DELETE" });
       if (res.ok) {
+        contentCacheRef.current.clear();
         setPosts((prev) => prev.filter((p) => p.id !== id));
         if (selectedPost?.id === id) setSelectedPost(null);
+        loadData(currentPage);
       }
     } catch {
       alert("Failed to delete post");
     }
   };
 
-  // Telemetry counts
-  const draftCount = posts.filter((p) => p.status === "draft" || p.status === "in_review").length;
-  const approvedCount = posts.filter((p) => p.status === "approved").length;
-  const publishedCount = posts.filter((p) => p.status === "published" || p.status === "partially_published").length;
+  // Telemetry counts fallback to local filtered list if counts not yet received
+  const draftCount = counts.draft || posts.filter((p) => p.status === "draft" || p.status === "in_review").length;
+  const approvedCount = counts.approved || posts.filter((p) => p.status === "approved").length;
+  const publishedCount = counts.published || posts.filter((p) => p.status === "published" || p.status === "partially_published").length;
+  const totalCount = counts.total || posts.length;
 
   const renderStatusBadge = (status: ContentStatus) => {
     switch (status) {
@@ -134,7 +214,7 @@ export function ContentAgentView() {
         <div className="rounded-2xl border border-black/[0.08] bg-white/80 backdrop-blur-xl p-5 shadow-xs dark:border-white/[0.08] dark:bg-zinc-900/60">
           <div className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400">Total Packages</div>
           <div className="mt-1 text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
-            {posts.length}
+            {totalCount}
           </div>
           <div className="mt-1 text-[11px] text-zinc-400 font-mono">Neon DB Storage</div>
         </div>
@@ -311,6 +391,68 @@ export function ContentAgentView() {
                 </div>
               </div>
             ))}
+          </div>
+        )}
+
+        {/* Pagination Controls */}
+        {totalPages > 1 && (
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-2xl border border-black/[0.06] bg-white/60 backdrop-blur-md p-3.5 px-4 text-xs dark:border-white/[0.06] dark:bg-zinc-900/40">
+            <span className="text-zinc-500 dark:text-zinc-400 font-medium">
+              Showing {totalMatching === 0 ? 0 : (currentPage - 1) * pageSize + 1} to{" "}
+              {Math.min(currentPage * pageSize, totalMatching)} of {totalMatching} packages
+            </span>
+
+            <div className="flex items-center gap-1.5 self-center sm:self-auto">
+              <button
+                onClick={() => handlePageChange(currentPage - 1)}
+                disabled={currentPage <= 1 || isLoading}
+                className="apple-press rounded-xl border border-black/[0.08] bg-white px-3 py-1.5 font-medium disabled:opacity-40 hover:bg-zinc-50 dark:border-white/[0.08] dark:bg-zinc-800 dark:hover:bg-zinc-700 cursor-pointer transition-colors"
+              >
+                Previous
+              </button>
+
+              <div className="flex items-center gap-1">
+                {Array.from({ length: totalPages }, (_, i) => i + 1).map((p) => {
+                  if (
+                    totalPages > 7 &&
+                    p !== 1 &&
+                    p !== totalPages &&
+                    Math.abs(p - currentPage) > 1
+                  ) {
+                    if (p === 2 || p === totalPages - 1) {
+                      return (
+                        <span key={p} className="px-1 text-zinc-400">
+                          ...
+                        </span>
+                      );
+                    }
+                    return null;
+                  }
+                  const isCurrent = p === currentPage;
+                  return (
+                    <button
+                      key={p}
+                      onClick={() => handlePageChange(p)}
+                      className={`h-7 w-7 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                        isCurrent
+                          ? "bg-zinc-900 text-white shadow-xs dark:bg-zinc-100 dark:text-zinc-900"
+                          : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+                      }`}
+                    >
+                      {p}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <button
+                onClick={() => handlePageChange(currentPage + 1)}
+                disabled={currentPage >= totalPages || isLoading}
+                className="apple-press rounded-xl border border-black/[0.08] bg-white px-3 py-1.5 font-medium disabled:opacity-40 hover:bg-zinc-50 dark:border-white/[0.08] dark:bg-zinc-800 dark:hover:bg-zinc-700 cursor-pointer transition-colors"
+              >
+                Next
+              </button>
+            </div>
           </div>
         )}
       </section>

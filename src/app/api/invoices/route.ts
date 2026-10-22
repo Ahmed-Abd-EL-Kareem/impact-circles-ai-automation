@@ -262,3 +262,48 @@ export async function GET(req: NextRequest) {
     );
   }
 }
+
+/**
+ * DELETE /api/invoices
+ * Deletes an expense / invoice record by ID.
+ */
+export async function DELETE(req: NextRequest) {
+  try {
+    const { searchParams } = new URL(req.url);
+    const id = searchParams.get("id");
+
+    if (!id || !id.trim()) {
+      return NextResponse.json(
+        { success: false, error: "Missing required parameter 'id'." },
+        { status: 400 }
+      );
+    }
+
+    const existing = await prisma.expense.findUnique({
+      where: { id: id.trim() },
+    });
+
+    if (!existing) {
+      return NextResponse.json(
+        { success: false, error: "Invoice record not found." },
+        { status: 404 }
+      );
+    }
+
+    await prisma.expense.delete({
+      where: { id: id.trim() },
+    });
+
+    return NextResponse.json({
+      success: true,
+      deletedId: id.trim(),
+      message: "Invoice deleted successfully.",
+    });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Failed to delete expense record.";
+    return NextResponse.json(
+      { success: false, error: message },
+      { status: 500 }
+    );
+  }
+}

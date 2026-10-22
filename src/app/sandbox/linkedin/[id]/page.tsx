@@ -6,20 +6,23 @@ interface PageProps {
   params: Promise<{ id: string }>;
 }
 
-
 export const instant = false;
 
 export default async function SandboxLinkedInPage({ params }: PageProps) {
   const { id } = await params;
-  const targetUrn = id.startsWith("urn:li:share:") ? id : `urn:li:share:${id}`;
+  const decodedId = decodeURIComponent(id);
+  const targetUrn = decodedId.startsWith("urn:li:share:") ? decodedId : `urn:li:share:${decodedId}`;
 
   const publication = await prisma.sandboxPublication.findFirst({
     where: {
       channel: "linkedin",
       OR: [
         { externalId: targetUrn },
+        { externalId: decodedId },
         { externalId: id },
+        { slug: decodedId },
         { slug: id },
+        { id: decodedId },
         { id },
       ],
     },

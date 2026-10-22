@@ -56,9 +56,6 @@ export function Header({
               <h1 className="text-sm font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
                 Impact Circles
               </h1>
-              <span className="rounded-md border border-zinc-200/80 bg-zinc-100/80 px-1.5 py-0.5 font-mono text-[10px] font-medium text-zinc-600 dark:border-zinc-800 dark:bg-zinc-800/80 dark:text-zinc-300">
-                {activeTab === "finance" ? "Phase 2" : "Phase 3"}
-              </span>
             </div>
             <p className="text-[11px] text-zinc-500 dark:text-zinc-400 font-normal">
               {activeTab === "finance"

@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { publishContentPost, SUPPORTED_CHANNELS } from "@/lib/services/publishing";
 import { verifyReviewerPasscode } from "@/lib/services/reviewer-auth";
+import { dispatchContentToN8nWorkflow } from "@/lib/services/workflow-client";
+import { prisma } from "@/lib/db";
 import { PublishChannel } from "@/lib/types/content";
 
 interface RouteParams {
@@ -51,6 +53,40 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
       }
     } catch {
       // Empty or non-JSON body is valid, defaults to post's targetChannels
+    }
+
+    if (process.env.N8N_CONTENT_WEBHOOK_URL) {
+      const n8nResult = await dispatchContentToN8nWorkflow({
+        action: "publish",
+        postId: id,
+        channels: forcedChannels,
+      });
+
+      if (!n8nResult.success) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: n8nResult.error,
+          },
+          { status: n8nResult.statusCode || 502 }
+        );
+      }
+
+      const updatedPost = await prisma.contentPost.findUnique({
+        where: { id },
+        include: {
+          publishingLogs: {
+            orderBy: { createdAt: "desc" },
+          },
+        },
+      });
+
+      return NextResponse.json({
+        success: true,
+        message: "Automated publishing dispatch completed for selected channels via n8n.",
+        post: updatedPost,
+        results: n8nResult.results,
+      });
     }
 
     const result = await publishContentPost(id, { forcedChannels });
