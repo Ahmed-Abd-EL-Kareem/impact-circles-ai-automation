@@ -14,7 +14,7 @@ export type ContentStatus =
   | "rejected"
   | "failed";
 
-export type PublishLogStatus = "success" | "failed" | "simulated";
+export type PublishLogStatus = "published" | "success" | "failed" | "simulated";
 
 export interface LinkedInPostContent {
   postText: string;

@@ -102,6 +102,35 @@ export function ContentReviewModal({
     );
   };
 
+  // Reviewer Passcode fetch wrapper (sessionStorage cached)
+  const fetchWithPasscode = async (url: string, options: RequestInit): Promise<Response> => {
+    let headers: Record<string, string> = {
+      ...(options.headers as Record<string, string>),
+    };
+    const storedCode = typeof window !== "undefined" ? sessionStorage.getItem("reviewer_passcode") : null;
+    if (storedCode) {
+      headers["x-reviewer-passcode"] = storedCode;
+    }
+
+    let res = await fetch(url, { ...options, headers });
+    if (res.status === 401) {
+      const clone = res.clone();
+      const body = await clone.json().catch(() => ({}));
+      if (typeof body.error === "string" && body.error.toLowerCase().includes("reviewer passcode")) {
+        const entered = window.prompt("Authorized Reviewer Passcode Required (will be kept in sessionStorage):");
+        if (entered) {
+          sessionStorage.setItem("reviewer_passcode", entered.trim());
+          headers = {
+            ...headers,
+            "x-reviewer-passcode": entered.trim(),
+          };
+          res = await fetch(url, { ...options, headers });
+        }
+      }
+    }
+    return res;
+  };
+
   // 1. Save Edits (PATCH)
   const handleSaveChanges = async () => {
     setIsSaving(true);
@@ -129,7 +158,7 @@ export function ContentReviewModal({
         tags: ["Research", "Impact Circles"],
       };
 
-      const res = await fetch(`/api/content/${post.id}`, {
+      const res = await fetchWithPasscode(`/api/content/${post.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -171,7 +200,7 @@ export function ContentReviewModal({
     setActionMessage(null);
 
     try {
-      const res = await fetch(`/api/content/${post.id}/approve`, {
+      const res = await fetchWithPasscode(`/api/content/${post.id}/approve`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -208,7 +237,7 @@ export function ContentReviewModal({
     setActionMessage(null);
 
     try {
-      const res = await fetch(`/api/content/${post.id}/approve`, {
+      const res = await fetchWithPasscode(`/api/content/${post.id}/approve`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -238,20 +267,25 @@ export function ContentReviewModal({
   };
 
   // 3. Automated Publishing (POST /publish)
-  const handlePublish = async () => {
-    if (post.status !== "approved") {
-      setActionMessage({
-        type: "error",
-        text: "Content must be explicitly approved by a team member before publishing.",
-      });
-      return;
-    }
+  const canPublish =
+    (post.status === "approved" ||
+      post.status === "partially_published" ||
+      post.status === "failed") &&
+    !channelsModifiedAfterApproval;
 
-    if (channelsModifiedAfterApproval) {
-      setActionMessage({
-        type: "error",
-        text: "Channel selection has changed since approval. The new selection must be saved and approved again before publishing.",
-      });
+  const handlePublish = async () => {
+    if (!canPublish) {
+      if (channelsModifiedAfterApproval) {
+        setActionMessage({
+          type: "error",
+          text: "Channel selection has changed since approval. The new selection must be saved and approved again before publishing.",
+        });
+      } else {
+        setActionMessage({
+          type: "error",
+          text: "Content must be explicitly approved by a team member before publishing.",
+        });
+      }
       return;
     }
 
@@ -259,7 +293,7 @@ export function ContentReviewModal({
     setActionMessage(null);
 
     try {
-      const res = await fetch(`/api/content/${post.id}/publish`, {
+      const res = await fetchWithPasscode(`/api/content/${post.id}/publish`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ channels: selectedChannels }),
@@ -272,12 +306,26 @@ export function ContentReviewModal({
 
       onPostUpdated(data.post);
       setActiveTab("logs");
-      const simulatedCount = data.results?.filter((r: { status: string }) => r.status === "simulated").length || 0;
-      const failedCount = data.results?.filter((r: { status: string }) => r.status === "failed").length || 0;
-      setActionMessage({
-        type: failedCount > 0 ? "warning" : "success",
-        text: `Automated demonstration dispatch completed for ${data.results?.length || selectedChannels.length} channel(s) (${simulatedCount} simulated sandbox, ${failedCount} failed). Demonstration audit records saved.`,
-      });
+      const publishedCount =
+        data.results?.filter((r: { status: string }) => r.status === "published" || r.status === "success").length || 0;
+      const failedCount =
+        data.results?.filter((r: { status: string }) => r.status === "failed").length || 0;
+
+      if (failedCount > 0) {
+        const failedChannels = data.results
+          ?.filter((r: { status: string }) => r.status === "failed")
+          .map((r: { channel: string }) => r.channel)
+          .join(", ");
+        setActionMessage({
+          type: "warning",
+          text: `Publishing partially completed (${publishedCount} published, ${failedCount} failed on ${failedChannels}). You can retry publishing to dispatch remaining channels.`,
+        });
+      } else {
+        setActionMessage({
+          type: "success",
+          text: `Published to sandbox across all ${publishedCount} channel(s)! Click the URLs below to view each published record.`,
+        });
+      }
     } catch (err: unknown) {
       setActionMessage({
         type: "error",
@@ -302,14 +350,14 @@ export function ContentReviewModal({
         return (
           <span className="inline-flex items-center gap-1 rounded-full border border-sky-500/30 bg-sky-50 px-2.5 py-0.5 text-xs font-semibold text-sky-700 dark:border-sky-500/30 dark:bg-sky-950/40 dark:text-sky-300">
             <span className="h-1.5 w-1.5 rounded-full bg-sky-500" />
-            Demo Completed (Simulated)
+            Published to Sandbox
           </span>
         );
       case "partially_published":
         return (
           <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-50 px-2.5 py-0.5 text-xs font-semibold text-amber-700 dark:border-amber-500/30 dark:bg-amber-950/40 dark:text-amber-300">
             <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
-            Partially Simulated
+            Partially Published (Sandbox)
           </span>
         );
       case "rejected":
@@ -323,7 +371,7 @@ export function ContentReviewModal({
         return (
           <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-50 px-2.5 py-0.5 text-xs font-semibold text-amber-700 dark:border-amber-500/30 dark:bg-amber-950/40 dark:text-amber-300">
             <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
-            Re-approval Required
+            Re-approval Needed
           </span>
         );
       default:
@@ -670,23 +718,33 @@ export function ContentReviewModal({
                           </span>
                           <span
                             className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
-                              log.status === "success"
+                              log.status === "published" || log.status === "success"
                                 ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300"
                                 : log.status === "simulated"
                                 ? "bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300"
                                 : "bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300"
                             }`}
                           >
-                            {log.status === "simulated" ? "Simulated Sandbox" : log.status}
+                            {log.status === "published"
+                              ? "Published (Sandbox)"
+                              : log.status === "simulated"
+                              ? "Simulated Demo"
+                              : log.status}
                           </span>
                         </div>
                         {log.publishedUrl && (
                           <div className="mt-1 flex flex-wrap items-center gap-2">
-                            <span className="font-mono text-[11px] text-zinc-600 dark:text-zinc-400 select-all">
-                              {log.publishedUrl}
-                            </span>
-                            <span className="rounded bg-amber-100/70 px-1.5 py-0.5 text-[10px] font-medium text-amber-800 dark:bg-amber-950/50 dark:text-amber-300">
-                              Demo Reference (Simulated)
+                            <a
+                              href={log.publishedUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="font-mono text-[11px] text-emerald-600 dark:text-emerald-400 hover:underline font-medium flex items-center gap-1 select-all"
+                            >
+                              <span>{log.publishedUrl}</span>
+                              <span className="text-[10px]">↗</span>
+                            </a>
+                            <span className="rounded bg-emerald-100/70 px-1.5 py-0.5 text-[10px] font-medium text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300">
+                              Sandbox View
                             </span>
                           </div>
                         )}
@@ -727,7 +785,7 @@ export function ContentReviewModal({
           </div>
 
           <div className="flex items-center gap-2.5">
-            {post.status !== "approved" && (
+            {post.status !== "approved" && post.status !== "published" && (
               <button
                 onClick={handleApprove}
                 disabled={isApproving}
@@ -739,13 +797,15 @@ export function ContentReviewModal({
 
             <button
               onClick={handlePublish}
-              disabled={isPublishing || post.status !== "approved" || channelsModifiedAfterApproval}
+              disabled={isPublishing || !canPublish}
               title={
-                post.status !== "approved"
-                  ? "Content must be explicitly approved before publishing"
-                  : channelsModifiedAfterApproval
-                  ? "Channel selection modified: save edits and obtain renewed approval before publishing"
-                  : "Trigger automated demonstration sandbox publication"
+                !canPublish
+                  ? channelsModifiedAfterApproval
+                    ? "Channel selection modified: save edits and obtain renewed approval before publishing"
+                    : "Content must be explicitly approved before publishing"
+                  : post.status === "partially_published" || post.status === "failed"
+                  ? "Retry automated sandbox publishing for failed channels"
+                  : "Trigger automated sandbox publication"
               }
               className="apple-press flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-semibold text-white shadow-xs hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed dark:bg-emerald-600 dark:hover:bg-emerald-500 cursor-pointer"
             >
@@ -755,14 +815,18 @@ export function ContentReviewModal({
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
                   </svg>
-                  <span>Simulating Channel Dispatch...</span>
+                  <span>Publishing to Sandbox...</span>
                 </>
               ) : (
                 <>
                   <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                     <path strokeLinecap="round" strokeLinejoin="round" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
                   </svg>
-                  <span>Publish to Selected Channels (Sandbox)</span>
+                  <span>
+                    {post.status === "partially_published" || post.status === "failed"
+                      ? "Retry Failed Channels (Sandbox)"
+                      : "Publish to Selected Channels (Sandbox)"}
+                  </span>
                 </>
               )}
             </button>

@@ -1,0 +1,46 @@
+[
+  {
+    "id": "log_sample_web_001",
+    "postId": "post_sample_agro_001",
+    "channel": "website",
+    "status": "published",
+    "publishedUrl": "http://localhost:3000/sandbox/news/satellite-multispectral-verification-regenerative-agriculture",
+    "responsePayload": {
+      "id": "pub_sample_web_001",
+      "link": "http://localhost:3000/sandbox/news/satellite-multispectral-verification-regenerative-agriculture",
+      "status": "publish",
+      "slug": "satellite-multispectral-verification-regenerative-agriculture",
+      "target": "WordPress REST API (Simulated Sandbox Destination)"
+    },
+    "errorMessage": null,
+    "createdAt": "2026-03-20T13:05:01.000Z"
+  },
+  {
+    "id": "log_sample_li_002",
+    "postId": "post_sample_agro_001",
+    "channel": "linkedin",
+    "status": "published",
+    "publishedUrl": "http://localhost:3000/sandbox/linkedin/urn_li_share_agro_001",
+    "responsePayload": {
+      "id": "urn:li:share:agro_001",
+      "link": "http://localhost:3000/sandbox/linkedin/urn_li_share_agro_001",
+      "target": "LinkedIn Shares API (Simulated Sandbox Destination)"
+    },
+    "errorMessage": null,
+    "createdAt": "2026-03-20T13:05:02.000Z"
+  },
+  {
+    "id": "log_sample_nl_003",
+    "postId": "post_sample_agro_001",
+    "channel": "newsletter",
+    "status": "published",
+    "publishedUrl": "http://localhost:3000/sandbox/newsletter/camp_agro_001",
+    "responsePayload": {
+      "id": "camp_agro_001",
+      "link": "http://localhost:3000/sandbox/newsletter/camp_agro_001",
+      "target": "Newsletter Broadcaster API (Simulated Sandbox Destination)"
+    },
+    "errorMessage": null,
+    "createdAt": "2026-03-20T13:05:03.000Z"
+  }
+]

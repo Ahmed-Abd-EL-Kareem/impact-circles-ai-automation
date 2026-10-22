@@ -87,6 +87,13 @@ export interface CategorySummary {
   count: number;
 }
 
+export interface CategoryCurrencySummary {
+  category: ExpenseCategory;
+  currency: string;
+  count: number;
+  totalAmount: string;
+}
+
 export interface FinanceSummaryData {
   totalExpenses: number;
   needsReviewCount: number;
@@ -94,4 +101,5 @@ export interface FinanceSummaryData {
   duplicateSuspectedCount: number;
   byCurrency: CurrencySummary[];
   byCategory: CategorySummary[];
+  byCategoryAndCurrency: CategoryCurrencySummary[];
 }

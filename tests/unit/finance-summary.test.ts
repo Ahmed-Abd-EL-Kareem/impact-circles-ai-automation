@@ -15,6 +15,7 @@ function calculateFinanceSummary(expenses: ExpenseStub[]) {
 
   const currencyMap = new Map<string, { count: number; total: number }>();
   const categoryMap = new Map<string, number>();
+  const categoryCurrencyMap = new Map<string, { category: string; currency: string; count: number; total: number }>();
 
   for (const exp of expenses) {
     if (exp.validationStatus === "valid") validCount++;
@@ -49,6 +50,22 @@ function calculateFinanceSummary(expenses: ExpenseStub[]) {
           count: existing.count + 1,
           total: totalCents / 100,
         });
+
+        // Category + Currency grouping
+        const catKey = `${exp.category}:::${curr}`;
+        const existingCatCurr = categoryCurrencyMap.get(catKey) || {
+          category: exp.category,
+          currency: curr,
+          count: 0,
+          total: 0,
+        };
+        const catTotalCents = Math.round(existingCatCurr.total * 100) + Math.round(parsed * 100);
+        categoryCurrencyMap.set(catKey, {
+          category: exp.category,
+          currency: curr,
+          count: existingCatCurr.count + 1,
+          total: catTotalCents / 100,
+        });
       }
     }
   }
@@ -65,6 +82,18 @@ function calculateFinanceSummary(expenses: ExpenseStub[]) {
     .map(([category, count]) => ({ category, count }))
     .sort((a, b) => b.count - a.count);
 
+  const byCategoryAndCurrency = Array.from(categoryCurrencyMap.values())
+    .map((data) => ({
+      category: data.category,
+      currency: data.currency,
+      count: data.count,
+      totalAmount: data.total.toFixed(2),
+    }))
+    .sort((a, b) => {
+      if (a.category !== b.category) return a.category.localeCompare(b.category);
+      return a.currency.localeCompare(b.currency);
+    });
+
   return {
     totalExpenses: expenses.length,
     needsReviewCount,
@@ -72,6 +101,7 @@ function calculateFinanceSummary(expenses: ExpenseStub[]) {
     duplicateSuspectedCount,
     byCurrency,
     byCategory,
+    byCategoryAndCurrency,
   };
 }
 
@@ -114,6 +144,21 @@ describe("Finance Summary & Currency Grouping", () => {
     assert.strictEqual(software?.count, 2);
     const travel = summary.byCategory.find((c) => c.category === "travel");
     assert.strictEqual(travel?.count, 1);
+
+    // Verify category AND currency breakdown
+    const softwareUsd = summary.byCategoryAndCurrency.find(
+      (c) => c.category === "software" && c.currency === "USD"
+    );
+    assert.ok(softwareUsd);
+    assert.strictEqual(softwareUsd.count, 2);
+    assert.strictEqual(softwareUsd.totalAmount, "150.00");
+
+    const travelEur = summary.byCategoryAndCurrency.find(
+      (c) => c.category === "travel" && c.currency === "EUR"
+    );
+    assert.ok(travelEur);
+    assert.strictEqual(travelEur.count, 1);
+    assert.strictEqual(travelEur.totalAmount, "200.00");
   });
 
   it("handles null currency and null amount records without throwing or polluting totals", () => {

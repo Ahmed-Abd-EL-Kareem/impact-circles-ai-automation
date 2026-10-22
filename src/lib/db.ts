@@ -43,6 +43,7 @@ const isCachedClientStale =
   !cachedPrisma ||
   !("contentPost" in cachedPrisma) ||
   !("publishingLog" in cachedPrisma) ||
+  !("sandboxPublication" in cachedPrisma) ||
   !("expense" in cachedPrisma);
 
 export const prisma = isCachedClientStale ? createPrismaClient() : cachedPrisma;

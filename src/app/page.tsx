@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { Header } from "@/components/Header";
 import { SummaryCards } from "@/components/SummaryCards";
+import { CategoryBreakdownTable } from "@/components/CategoryBreakdownTable";
 import { DocumentUploadZone } from "@/components/DocumentUploadZone";
 import { ExpenseTable } from "@/components/ExpenseTable";
 import { ValidationIssuesModal } from "@/components/ValidationIssuesModal";
@@ -173,7 +174,7 @@ export default function FinanceDashboardPage() {
             )}
 
             {/* Top Summary Banner */}
-            <section aria-labelledby="summary-heading" className="space-y-3">
+            <section aria-labelledby="summary-heading" className="space-y-4">
               <div className="flex items-center justify-between">
                 <h2 id="summary-heading" className="text-xs font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
                   Executive Telemetry & Financial Health
@@ -183,6 +184,7 @@ export default function FinanceDashboardPage() {
                 </span>
               </div>
               <SummaryCards summary={summary} isLoading={isLoadingSummary} />
+              <CategoryBreakdownTable data={summary?.byCategoryAndCurrency} isLoading={isLoadingSummary} />
             </section>
 
             {/* Upload Document Section */}

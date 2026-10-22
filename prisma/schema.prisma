@@ -69,3 +69,19 @@ model PublishingLog {
   @@index([channel])
   @@index([createdAt])
 }
+
+model SandboxPublication {
+  id         String   @id @default(cuid())
+  channel    String
+  externalId String
+  title      String
+  slug       String?
+  content    Json
+  url        String
+  createdAt  DateTime @default(now())
+
+  @@index([channel])
+  @@index([slug])
+  @@index([createdAt])
+}
+

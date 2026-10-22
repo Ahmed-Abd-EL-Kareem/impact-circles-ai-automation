@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
+import { verifyReviewerPasscode } from "@/lib/services/reviewer-auth";
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -11,6 +12,11 @@ interface RouteParams {
  */
 export async function POST(req: NextRequest, { params }: RouteParams) {
   try {
+    const auth = verifyReviewerPasscode(req);
+    if (!auth.authorized) {
+      return auth.response!;
+    }
+
     const { id } = await params;
     const body = await req.json();
     const action = body.action as "approve" | "reject";

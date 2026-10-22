@@ -11,6 +11,8 @@
     "test:direct": "npx tsx --env-file=.env scripts/test-direct-pipeline.ts",
     "test:e2e": "npx tsx --env-file=.env scripts/test-n8n-e2e.ts",
     "test:integration": "npx tsx --env-file=.env scripts/test-integration.ts",
+    "export:samples": "npx tsx scripts/export-samples.ts",
+    "verify:e2e": "npx tsx scripts/verify-e2e.ts",
     "workflow:sync": "node scripts/sync-n8n-workflow.mjs"
   },
   "dependencies": {

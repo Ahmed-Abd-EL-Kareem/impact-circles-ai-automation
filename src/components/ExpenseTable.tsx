@@ -117,6 +117,21 @@ export function ExpenseTable({
             <option value="personnel">Personnel</option>
             <option value="uncategorized">Uncategorized</option>
           </select>
+
+          {/* Export CSV Button */}
+          <a
+            href={`/api/invoices/export?${new URLSearchParams({
+              ...(selectedStatus !== "all" ? { status: selectedStatus } : {}),
+              ...(selectedCategory !== "all" ? { category: selectedCategory } : {}),
+            }).toString()}`}
+            download="expenses.csv"
+            className="apple-press inline-flex items-center gap-1.5 rounded-xl border border-black/[0.08] bg-white px-3 py-1.5 text-xs font-semibold text-zinc-700 shadow-2xs hover:bg-zinc-50 dark:border-white/[0.08] dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
+          >
+            <svg className="h-3.5 w-3.5 text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+            </svg>
+            <span>Export CSV</span>
+          </a>
         </div>
       </div>
 

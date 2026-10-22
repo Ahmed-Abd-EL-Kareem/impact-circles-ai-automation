@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { publishContentPost, SUPPORTED_CHANNELS } from "@/lib/services/publishing";
+import { verifyReviewerPasscode } from "@/lib/services/reviewer-auth";
 import { PublishChannel } from "@/lib/types/content";
 
 interface RouteParams {
@@ -13,6 +14,11 @@ interface RouteParams {
  */
 export async function POST(req: NextRequest, { params }: RouteParams) {
   try {
+    const auth = verifyReviewerPasscode(req);
+    if (!auth.authorized) {
+      return auth.response!;
+    }
+
     const { id } = await params;
     let forcedChannels: PublishChannel[] | undefined = undefined;
 
@@ -80,7 +86,7 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
 
     return NextResponse.json({
       success: true,
-      message: "Automated demonstration dispatch completed for selected channels (simulated).",
+      message: "Automated publishing dispatch completed for selected channels (Sandbox).",
       post: result.post,
       results: result.results,
     });

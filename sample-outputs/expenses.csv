@@ -1,0 +1,4 @@
+ID,Date,Vendor,Invoice Number,Description,Category,Amount,Currency,Subtotal,Tax,Validation Status,Validation Issues Count,Source File Name,Created At
+exp_sample_valid_001,2026-03-20,Acme Cloud Hosting Inc.,INV-2026-9012,Cloud Server Hosting Cluster,software,165.00,USD,150.00,15.00,valid,0,fictional-invoice.pdf,2026-03-20T12:00:00.000Z
+exp_sample_duplicate_002,2026-03-20,Acme Cloud Hosting Inc.,INV-2026-9012,Cloud Server Hosting Cluster (Duplicate Submission),software,165.00,USD,150.00,15.00,duplicate_suspected,1,fictional-duplicate-invoice.pdf,2026-03-20T12:15:00.000Z
+exp_sample_missing_003,,Local Hardware Mart,,Sensor mounting brackets,equipment,85.00,EUR,,,needs_review,3,fictional-missing-fields-invoice.pdf,2026-03-20T12:30:00.000Z

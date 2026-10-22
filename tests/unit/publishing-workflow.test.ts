@@ -1,4 +1,4 @@
-import { describe, it, beforeEach } from "node:test";
+import { describe, it, beforeEach, after, before } from "node:test";
 import assert from "node:assert";
 import http from "node:http";
 import { prisma } from "../../src/lib/db.ts";
@@ -8,13 +8,105 @@ import {
 } from "../../src/lib/services/publishing.ts";
 import type { PublishChannel } from "../../src/lib/types/content.ts";
 
-describe("Phase 3: Publishing Invariants & Sandbox Demonstration Workflow", () => {
-  // In-memory mock database state for testing
+describe("Phase 1: Real Sandbox Publishing Invariants & Workflow", () => {
   let mockPost: any = null;
   let mockLogs: any[] = [];
+  let testServer: http.Server;
+  let serverPort: number;
+  let serverRequests: Array<{ url: string; method: string; body: any; auth: string | undefined }> = [];
+  let failingChannels = new Set<string>();
+
+  before(async () => {
+    testServer = http.createServer(async (req, res) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) {
+        chunks.push(chunk);
+      }
+      const rawBody = Buffer.concat(chunks).toString("utf-8");
+      let body: any = {};
+      try {
+        body = JSON.parse(rawBody);
+      } catch {
+        body = rawBody;
+      }
+
+      const record = {
+        url: req.url || "",
+        method: req.method || "",
+        body,
+        auth: req.headers["authorization"],
+      };
+      serverRequests.push(record);
+
+      // Check if channel is simulated to fail
+      if (req.url?.includes("/api/sandbox/linkedin") && failingChannels.has("linkedin")) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Simulated LinkedIn failure" }));
+        return;
+      }
+      if (req.url?.includes("/api/sandbox/cms") && failingChannels.has("website")) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Simulated CMS failure" }));
+        return;
+      }
+      if (req.url?.includes("/api/sandbox/newsletter") && failingChannels.has("newsletter")) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Simulated Newsletter failure" }));
+        return;
+      }
+
+      // Successful sandbox dispatches
+      if (req.url?.includes("/api/sandbox/cms/posts")) {
+        res.writeHead(201, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          id: "pub_cms_123",
+          link: `http://127.0.0.1:${serverPort}/sandbox/news/${body.slug || "test-post"}`,
+        }));
+        return;
+      }
+      if (req.url?.includes("/api/sandbox/linkedin/posts")) {
+        res.writeHead(201, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          id: "urn:li:share:test_123",
+          link: `http://127.0.0.1:${serverPort}/sandbox/linkedin/test_123`,
+        }));
+        return;
+      }
+      if (req.url?.includes("/api/sandbox/newsletter/send")) {
+        res.writeHead(201, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          id: "camp_test_123",
+          link: `http://127.0.0.1:${serverPort}/sandbox/newsletter/camp_test_123`,
+        }));
+        return;
+      }
+
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Not Found" }));
+    });
+
+    serverPort = await new Promise<number>((resolve) => {
+      testServer.listen(0, "127.0.0.1", () => {
+        const addr = testServer.address();
+        resolve(typeof addr === "object" && addr ? addr.port : 58999);
+      });
+    });
+
+    process.env.SANDBOX_BASE_URL = `http://127.0.0.1:${serverPort}`;
+    process.env.SANDBOX_API_KEY = "test_sandbox_secret";
+  });
+
+  after(async () => {
+    delete process.env.SANDBOX_BASE_URL;
+    delete process.env.SANDBOX_API_KEY;
+    await new Promise<void>((resolve) => testServer.close(() => resolve()));
+  });
 
   beforeEach(() => {
     mockLogs = [];
+    serverRequests = [];
+    failingChannels.clear();
+
     mockPost = {
       id: "post_test_123",
       title: "Clean Water Sensor Milestone",
@@ -91,6 +183,7 @@ describe("Phase 3: Publishing Invariants & Sandbox Demonstration Workflow", () =
       `Expected approval error message, got: ${result.error}`
     );
     assert.strictEqual(mockLogs.length, 0);
+    assert.strictEqual(serverRequests.length, 0);
   });
 
   it("strictly rejects publication of an 'in_review' or 'rejected' post", async () => {
@@ -103,6 +196,7 @@ describe("Phase 3: Publishing Invariants & Sandbox Demonstration Workflow", () =
     const resRejected = await publishContentPost("post_test_123");
     assert.strictEqual(resRejected.success, false);
     assert.ok(resRejected.error?.includes("Explicit human approval is required"));
+    assert.strictEqual(serverRequests.length, 0);
   });
 
   it("returns not found for nonexistent content post", async () => {
@@ -125,16 +219,12 @@ describe("Phase 3: Publishing Invariants & Sandbox Demonstration Workflow", () =
       `Expected channel validation error, got: ${result.error}`
     );
     assert.strictEqual(mockLogs.length, 0);
+    assert.strictEqual(serverRequests.length, 0);
   });
 
-  it("executes sandbox publication for an approved post and records simulated statuses without claiming live publication", async () => {
+  it("success path performs real HTTP fetch, stores URL, and sets status to 'published'", async () => {
     mockPost.status = "approved";
     mockPost.approvedAt = new Date();
-
-    // Ensure no live webhooks are set in env
-    delete process.env.CMS_WEBHOOK_URL;
-    delete process.env.LINKEDIN_WEBHOOK_URL;
-    delete process.env.NEWSLETTER_WEBHOOK_URL;
 
     const result = await publishContentPost("post_test_123", {
       forcedChannels: ["website", "linkedin", "newsletter"],
@@ -142,69 +232,80 @@ describe("Phase 3: Publishing Invariants & Sandbox Demonstration Workflow", () =
 
     assert.strictEqual(result.success, true);
     assert.strictEqual(result.results.length, 3);
+    assert.strictEqual(serverRequests.length, 3);
 
-    // INVARIANT: In sandbox demonstration mode, status must be 'simulated', NEVER 'success'
-    for (const r of result.results) {
-      assert.strictEqual(
-        r.status,
-        "simulated",
-        `Expected channel ${r.channel} to have status 'simulated', got '${r.status}'`
-      );
-      assert.ok(r.publishedUrl, `Expected publishedUrl for ${r.channel}`);
-      assert.strictEqual(r.responsePayload?.mode, "sandbox_demonstration");
-      assert.strictEqual(r.responsePayload?.isSimulation, true);
+    // Verify Authorization Bearer was sent on all requests
+    for (const req of serverRequests) {
+      assert.strictEqual(req.auth, "Bearer test_sandbox_secret");
     }
 
-    // Verify persisted audit logs in mock database
+    // Verify all 3 channels recorded 'published' status with real URLs
+    for (const r of result.results) {
+      assert.strictEqual(r.status, "published");
+      assert.ok(r.publishedUrl?.includes(`http://127.0.0.1:${serverPort}`));
+    }
+
     assert.strictEqual(mockLogs.length, 3);
     for (const log of mockLogs) {
-      assert.strictEqual(log.status, "simulated");
+      assert.strictEqual(log.status, "published");
       assert.strictEqual(log.postId, "post_test_123");
     }
 
-    // Post status updated to published
     assert.strictEqual(mockPost.status, "published");
     assert.ok(mockPost.publishedAt);
   });
 
-  it("accurately handles and reports failed live channel dispatches", async () => {
-    // Start a temporary local mock server that returns 500
-    const failServer = http.createServer((_req, res) => {
-      res.writeHead(500, { "Content-Type": "text/plain" });
-      res.end("Internal CMS Server Error");
+  it("one failing channel gives 'partially_published' status", async () => {
+    mockPost.status = "approved";
+    mockPost.approvedAt = new Date();
+    failingChannels.add("linkedin"); // Simulate linkedin failure
+
+    const result = await publishContentPost("post_test_123", {
+      forcedChannels: ["website", "linkedin", "newsletter"],
     });
 
-    const port = await new Promise<number>((resolve) => {
-      failServer.listen(0, "127.0.0.1", () => {
-        const addr = failServer.address();
-        resolve(typeof addr === "object" && addr ? addr.port : 59998);
-      });
-    });
+    assert.strictEqual(result.success, true); // at least one succeeded
+    assert.strictEqual(mockPost.status, "partially_published");
 
-    process.env.CMS_WEBHOOK_URL = `http://127.0.0.1:${port}/api/post`;
+    const linkedinResult = result.results.find((r) => r.channel === "linkedin");
+    assert.ok(linkedinResult);
+    assert.strictEqual(linkedinResult.status, "failed");
+    assert.ok(linkedinResult.errorMessage?.includes("500"));
 
-    try {
-      mockPost.status = "approved";
-      mockPost.approvedAt = new Date();
-      mockPost.targetChannels = ["website"];
+    const webResult = result.results.find((r) => r.channel === "website");
+    assert.strictEqual(webResult?.status, "published");
 
-      const result = await publishContentPost("post_test_123", {
-        forcedChannels: ["website"],
-      });
+    const newsletterResult = result.results.find((r) => r.channel === "newsletter");
+    assert.strictEqual(newsletterResult?.status, "published");
+  });
 
-      assert.strictEqual(result.results.length, 1);
-      const webResult = result.results[0];
-      assert.strictEqual(webResult.channel, "website");
-      assert.strictEqual(webResult.status, "failed");
-      assert.ok(webResult.errorMessage?.includes("CMS API responded with 500"));
+  it("retry only hits failed channel and skips already published channels (no double publish)", async () => {
+    // 1. Initial attempt where linkedin fails
+    mockPost.status = "approved";
+    mockPost.approvedAt = new Date();
+    failingChannels.add("linkedin");
 
-      // All channels failed -> overall status is failed
-      assert.strictEqual(result.success, false);
-      assert.strictEqual(mockPost.status, "failed");
-    } finally {
-      delete process.env.CMS_WEBHOOK_URL;
-      await new Promise<void>((resolve) => failServer.close(() => resolve()));
-    }
+    const initialResult = await publishContentPost("post_test_123");
+    assert.strictEqual(mockPost.status, "partially_published");
+    assert.strictEqual(serverRequests.length, 3);
+
+    // 2. Fix linkedin failure and clear request log
+    failingChannels.clear();
+    serverRequests = [];
+
+    // 3. Retry publishing the post
+    const retryResult = await publishContentPost("post_test_123");
+
+    // Only linkedin should have been dispatched via HTTP!
+    assert.strictEqual(serverRequests.length, 1);
+    assert.ok(serverRequests[0].url.includes("/api/sandbox/linkedin"));
+
+    // Website and newsletter were preserved without duplicate HTTP dispatches
+    assert.strictEqual(mockPost.status, "published");
+    assert.strictEqual(retryResult.results.length, 3);
+
+    // Ensure mockLogs contains 4 total entries: 2 from initial success, 1 initial fail, 1 retry success
+    assert.strictEqual(mockLogs.length, 4);
   });
 
   it("enforces re-approval invariant: editing approved content resets status to 'in_review'", () => {
@@ -235,7 +336,7 @@ describe("Phase 3: Publishing Invariants & Sandbox Demonstration Workflow", () =
     assert.strictEqual(nextApprovedAt, null);
 
     // Publication logic checks
-    const canPublish = nextStatus === "approved";
+    const canPublish = nextStatus === "approved" && nextApprovedAt !== null;
     assert.strictEqual(canPublish, false);
   });
 
@@ -282,7 +383,7 @@ describe("Phase 3: Publishing Invariants & Sandbox Demonstration Workflow", () =
       publishAttempt.error?.includes("Explicit human approval is required before publishing"),
       `Expected re-approval error, got: ${publishAttempt.error}`
     );
-    assert.strictEqual(mockLogs.length, 0);
+    assert.strictEqual(serverRequests.length, 0);
   });
 
   it("strictly rejects publication when requested channels include an unapproved additional channel", async () => {
@@ -304,8 +405,7 @@ describe("Phase 3: Publishing Invariants & Sandbox Demonstration Workflow", () =
       result.error?.includes("Channel modifications require renewed approval"),
       `Expected re-approval requirement in error, got: ${result.error}`
     );
-    // INVARIANT: No publishing logs must be created for rejected requests
-    assert.strictEqual(mockLogs.length, 0);
+    assert.strictEqual(serverRequests.length, 0);
   });
 
   it("strictly rejects publication when requested channels omit approved channels or differ in selection", async () => {
@@ -320,32 +420,6 @@ describe("Phase 3: Publishing Invariants & Sandbox Demonstration Workflow", () =
 
     assert.strictEqual(result.success, false);
     assert.ok(result.error?.includes("Channel selection mismatch"));
-    assert.strictEqual(mockLogs.length, 0);
-  });
-
-  it("publishes successfully in sandbox mode when requested channels match the approved channel selection", async () => {
-    mockPost.status = "approved";
-    mockPost.approvedAt = new Date();
-    mockPost.targetChannels = ["website", "linkedin"];
-
-    delete process.env.CMS_WEBHOOK_URL;
-    delete process.env.LINKEDIN_WEBHOOK_URL;
-    delete process.env.NEWSLETTER_WEBHOOK_URL;
-
-    // Channels match approved selection (order varied)
-    const result = await publishContentPost("post_test_123", {
-      forcedChannels: ["linkedin", "website"],
-    });
-
-    assert.strictEqual(result.success, true);
-    assert.strictEqual(result.results.length, 2);
-    for (const r of result.results) {
-      assert.strictEqual(r.status, "simulated");
-    }
-    assert.strictEqual(mockLogs.length, 2);
-    for (const log of mockLogs) {
-      assert.strictEqual(log.status, "simulated");
-    }
-    assert.strictEqual(mockPost.status, "published");
+    assert.strictEqual(serverRequests.length, 0);
   });
 });

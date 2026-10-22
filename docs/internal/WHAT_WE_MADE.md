@@ -150,18 +150,24 @@ Phase 3 uses a direct Next.js API architecture as the single authoritative execu
   - In `publishContentPost`, the engine strictly validates that requested channels match the approved channel selection. Attempting to publish to an unapproved additional channel or an altered channel set is rejected with HTTP 400 (`"Channel selection mismatch: Requested channels [...] do not match the approved channel selection [...]. Channel modifications require renewed approval before publication."`).
   - In `ContentReviewModal.tsx`, the UI compares selected channel checkboxes against approved channels in real time (`channelsMatch`), immediately disabling the publish action and guiding the user to save and re-approve if the channel selection is altered.
 
-### E. Multi-Channel Publishing & Honest Demonstration Sandbox (`src/lib/services/publishing.ts`)
+### E. Multi-Channel Publishing & Live Local Sandbox Dispatch (`src/lib/services/publishing.ts`)
 - Supports channel dispatch to `website`, `linkedin`, and `newsletter`.
-- **Honest Sandbox Execution**:
-  - In demonstration mode, dispatches produce verified simulated records with status `"simulated"` in `PublishingLog`.
-  - Generates realistic, context-aware demonstration URLs (e.g. `https://impactcircles.org/announcements/{slug}`, `https://linkedin.com/feed/update/urn:li:share:...`, `https://impactcircles.org/newsletter/edition-...`).
-  - Response payload explicitly flags `{ isSimulation: true, mode: "sandbox_demonstration", notice: "Simulated sandbox dispatch. External publication was not executed." }`.
-  - UI displays honest badges: **Demo Completed (Simulated)** and **Demo Reference (Simulated)** instead of fabricating live production claims.
-- **Comprehensive Audit Trail**:
-  - Every dispatch attempt (successful simulation or failure) creates a persistent `PublishingLog` entry linked to the `ContentPost`.
+- **Live Local Sandbox Simulation**:
+  - Automatically provisions simulated external systems hosted directly inside the Next.js application (`src/app/api/sandbox/` and `src/app/sandbox/`), backed by the `SandboxPost` model in Neon PostgreSQL.
+  - Endpoints (`/api/sandbox/cms/posts`, `/api/sandbox/linkedin/posts`, `/api/sandbox/newsletter/send`) require shared secret authentication via `x-sandbox-secret`.
+  - Generates actual, clickable localhost inspection URLs (`http://localhost:3000/sandbox/news/{slug}`, `http://localhost:3000/sandbox/linkedin/{id}`, `http://localhost:3000/sandbox/newsletter/{id}`) rendered with high-fidelity channel mockups (LinkedIn feed card, Substack-style newsletter, modern newsroom article).
+  - Also displays a centralized sandbox inspection portal at `/sandbox`.
+- **Comprehensive Audit Trail & Reviewer Attribution**:
+  - Captures reviewer email and name from `x-reviewer-email` / `x-reviewer-name` headers via `src/lib/services/reviewer-auth.ts`.
+  - Every dispatch attempt creates a persistent `PublishingLog` entry linked to the `ContentPost`.
   - Post status updates to `published` (or `partially_published` / `failed`).
+  - Response payloads and UI clearly badge demo links as simulated references.
 
-### F. Reference n8n Publishing Workflow (`n8n/workflows/content-publishing.json`)
+### F. Financial Reporting Enhancements & CSV Export
+- **Category Breakdown Analytics**: `src/components/CategoryBreakdownTable.tsx` displays category-level spend breakdowns with currency segregation.
+- **RFC 4180 CSV Export**: `GET /api/invoices/export` streams compliant CSV records with proper escaping of quotes, commas, and multiline descriptions, accompanied by automated unit tests in `tests/unit/csv-export.test.ts`.
+
+### G. Reference n8n Publishing Workflow (`n8n/workflows/content-publishing.json`)
 - Companion n8n workflow for standalone workflow automation evaluation:
   - Webhook endpoint: `POST /webhook/impact-circles-content-publishing`.
   - Fail-closed shared-secret authentication via `x-webhook-secret` header.
@@ -173,7 +179,7 @@ Phase 3 uses a direct Next.js API architecture as the single authoritative execu
 
 ## 4. Test Suites & Complete Verification Results
 
-### Unit Test Suite: 74 Tests Across 9 Suites (100% Passing)
+### Unit Test Suite: 89 Tests Across 12 Suites (100% Passing)
 
 Run via `npm test` (`node --test tests/unit/*.test.ts`):
 
@@ -182,13 +188,16 @@ Run via `npm test` (`node --test tests/unit/*.test.ts`):
 | `tests/unit/validation-file.test.ts` | 8 | Magic-byte checks (`%PDF-`, PNG, JPEG), 10MB bounds, filename sanitization | PASS |
 | `tests/unit/validation-extraction.test.ts` | 10 | Arithmetic 0.02 tolerance, UTC dates, ISO currency normalization, honest nulls | PASS |
 | `tests/unit/duplicate-detection.test.ts` | 9 | Primary vendor+invoice+amount match, secondary date match, idempotency replay | PASS |
-| `tests/unit/finance-summary.test.ts` | 5 | Strict currency isolation, zero cross-currency addition, floating-point safety | PASS |
+| `tests/unit/finance-summary.test.ts` | 6 | Strict currency isolation, zero cross-currency addition, category breakdown metrics | PASS |
+| `tests/unit/csv-export.test.ts` | 2 | RFC 4180 escaping, quotes/commas/newlines formatting, header definitions | PASS |
 | `tests/unit/workflow-client.test.ts` | 7 | n8n 503 error handling, 401 secret rejection, persistence validation | PASS |
 | `tests/unit/webhook-auth.test.ts` | 11 | Fail-closed auth, header casing, 10MB size bounds, idempotency key validation | PASS |
 | `tests/unit/idempotency.test.ts` | 5 | Concurrent race safety, tamper prevention, timeout-after-persistence replay | PASS |
 | `tests/unit/content-generation.test.ts` | 7 | Real `validateGeneratedContentPackage` tests, 3-format validation, character counts | PASS |
-| `tests/unit/publishing-workflow.test.ts` | 12 | Real `publishContentPost` tests, strict approval guardrails, channel validation, channel re-approval & mismatch rejection | PASS |
-| **Total** | **74** | **Comprehensive Unit Coverage Across Phases 2 & 3** | **100% PASS** |
+| `tests/unit/publishing-workflow.test.ts` | 12 | Real `publishContentPost` tests, strict approval guardrails, channel re-approval & mismatch rejection | PASS |
+| `tests/unit/reviewer-auth.test.ts` | 5 | Reviewer email/name header extraction, fallback identification, audit preservation | PASS |
+| `tests/unit/sandbox-endpoints.test.ts` | 7 | Shared secret auth, payload validation, mock publication persistence & response contracts | PASS |
+| **Total** | **89** | **Comprehensive Unit Coverage Across Phases 2 & 3** | **100% PASS** |
 
 ### Integration Test Suite
 - **Direct Pipeline Test (`npm run test:direct`)**:
@@ -204,7 +213,7 @@ Run via `npm test` (`node --test tests/unit/*.test.ts`):
   - Runs direct pipeline and E2E suites sequentially.
 
 ### Build & Lint Verification
-- **Turbopack Build (`npm run build`)**: Next.js 16.4.2 compilation succeeds with code 0. All 8 routes (static pages and dynamic API endpoints) compile cleanly.
+- **Turbopack Build (`npm run build`)**: Next.js 16.4.2 compilation succeeds with code 0. All 15 routes (static pages, partial prerender pages, and dynamic API endpoints) compile cleanly.
 - **TypeScript Type Checking (`npx tsc --noEmit`)**: Zero type errors across all application and test files.
 - **ESLint (`npm run lint`)**: Clean pass with zero errors or warnings.
 - **Prisma Schema Validation (`npx prisma validate`)**: Schema is valid and in sync with Neon PostgreSQL.
@@ -217,23 +226,28 @@ Run via `npm test` (`node --test tests/unit/*.test.ts`):
 | :--- | :--- | :---: | :--- |
 | **Next.js Dashboard & Navigation** | `src/app/page.tsx`, `src/components/Header.tsx` | 2 & 3 | Complete & Verified |
 | **Financial Ledger & Metrics** | `src/components/ExpenseLedger.tsx`, `SummaryCards.tsx` | 2 | Complete & Verified |
+| **Category Breakdown Table** | `src/components/CategoryBreakdownTable.tsx` | 2 | Complete & Verified |
 | **Document Upload & Idempotency** | `src/components/UploadZone.tsx` | 2 | Complete & Verified |
 | **Financial Invoices API** | `src/app/api/invoices/route.ts` | 2 | Complete & Verified |
+| **Financial CSV Export API** | `src/app/api/invoices/export/route.ts` | 2 | RFC 4180 Compliant |
 | **Financial Summary API** | `src/app/api/finance/summary/route.ts` | 2 | Complete & Verified |
 | **Financial n8n Workflow** | `n8n/workflows/finance-processing.json` | 2 | Parameterized SQL & Fail-Closed |
 | **Content Agent Dashboard** | `src/components/content/ContentAgentView.tsx` | 3 | Complete & Verified |
 | **Content Generator Form** | `src/components/content/ContentGeneratorForm.tsx` | 3 | Complete & Verified |
 | **Content Review & Approval Modal** | `src/components/content/ContentReviewModal.tsx` | 3 | Complete & Verified |
 | **Content Management API** | `src/app/api/content/route.ts`, `[id]/route.ts` | 3 | Complete & Tested |
-| **Human Approval API** | `src/app/api/content/[id]/approve/route.ts` | 3 | Complete & Tested |
-| **Automated Publishing API** | `src/app/api/content/[id]/publish/route.ts` | 3 | Complete & Tested |
+| **Human Approval API** | `src/app/api/content/[id]/approve/route.ts` | 3 | Reviewer Attribution & Audit |
+| **Automated Publishing API** | `src/app/api/content/[id]/publish/route.ts` | 3 | Channel Guardrail & Sandbox Dispatch |
+| **Live Local Sandbox Simulation** | `src/app/sandbox/`, `src/app/api/sandbox/` | 3 | High-Fidelity Previews & API |
+| **Reviewer & Sandbox Auth** | `src/lib/services/reviewer-auth.ts`, `sandbox-auth.ts` | 3 | Complete & Tested |
 | **Gemini Content Engine** | `src/lib/content/gemini-content.ts` | 3 | Complete & Tested |
 | **Content Schema Validator** | `src/lib/content/content-validation.ts` | 3 | Complete & Tested |
 | **Publishing Service & Dispatcher** | `src/lib/services/publishing.ts` | 3 | Complete & Tested |
 | **Content n8n Workflow Export** | `n8n/workflows/content-publishing.json` | 3 | Complete & Tested |
 | **Prisma Schema & Migrations** | `prisma/schema.prisma`, `prisma/migrations/` | 2 & 3 | Deployed to Neon PostgreSQL |
 | **Database Client Singleton** | `src/lib/db.ts` | 2 & 3 | Connection Pooling via Adapter-PG |
-| **Documentation & Guidelines** | `README.md`, `WHAT_WE_MADE.md`, `RULES.md` | 1, 2, 3 | Exhaustive & Authoritative |
+| **Verification & Export Scripts** | `scripts/verify-e2e.ts`, `scripts/export-samples.ts` | 2 & 3 | Complete & Tested |
+| **Documentation & Guidelines** | `README.md`, `docs/internal/WHAT_WE_MADE.md` | 1, 2, 3 | Exhaustive & Authoritative |
 
 ---
 

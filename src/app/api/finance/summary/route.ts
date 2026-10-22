@@ -16,6 +16,7 @@ export async function GET() {
       duplicateSuspectedCount,
       currencyGroups,
       categoryGroups,
+      categoryCurrencyGroups,
     ] = await Promise.all([
       prisma.expense.count(),
       prisma.expense.count({
@@ -43,6 +44,16 @@ export async function GET() {
         by: ["category"],
         _count: { id: true },
       }),
+      prisma.expense.groupBy({
+        by: ["category", "currency"],
+        _count: { id: true },
+        _sum: { amount: true },
+        where: {
+          currency: { not: null },
+          amount: { gt: 0 },
+          validationStatus: { not: "failed" },
+        },
+      }),
     ]);
 
     const byCurrency = currencyGroups
@@ -59,6 +70,19 @@ export async function GET() {
       count: g._count.id,
     })).sort((a, b) => b.count - a.count);
 
+    const byCategoryAndCurrency = categoryCurrencyGroups
+      .filter((g) => g.category !== null && g.currency !== null)
+      .map((g) => ({
+        category: g.category as ExpenseCategory,
+        currency: g.currency as string,
+        count: g._count.id,
+        totalAmount: g._sum.amount ? g._sum.amount.toFixed(2) : "0.00",
+      }))
+      .sort((a, b) => {
+        if (a.category !== b.category) return a.category.localeCompare(b.category);
+        return a.currency.localeCompare(b.currency);
+      });
+
     const summary: FinanceSummaryData = {
       totalExpenses,
       needsReviewCount,
@@ -66,6 +90,7 @@ export async function GET() {
       duplicateSuspectedCount,
       byCurrency,
       byCategory,
+      byCategoryAndCurrency,
     };
 
     return NextResponse.json({

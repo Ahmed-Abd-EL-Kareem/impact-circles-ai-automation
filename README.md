@@ -1,133 +1,97 @@
-# Impact Circles — AI Automation: Financial Document Assistant (Phase 2)
+# Impact Circles — AI Automation Assessment Demo
 
-A production-grade vertical slice for intelligent financial document ingestion, structured multimodal extraction, duplicate detection, request idempotency, and persistent expense management built with **Next.js App Router**, **Neon PostgreSQL**, **Prisma ORM**, **Google Gemini API**, and **n8n workflow orchestration**.
+A full-stack vertical slice demonstration for intelligent financial document ingestion, structured multimodal data extraction, duplicate detection, and human-in-the-loop multi-channel content generation with sandbox publishing. Built for the Impact Circles AI Agents & Automation Developer assessment.
 
 ---
 
 ## Architecture & Processing Flow
 
 ```
-[User Browser]
-      │  (PDF / PNG / JPEG upload via Drag & Drop UI)
-      ▼
-[Next.js Server API: POST /api/invoices]
-      │  1. Validates magic bytes (%PDF, PNG, JPEG) and 10MB bounds
-      │  2. Dispatches payload + shared secret header (`x-webhook-secret`) to n8n
-      ▼
-[n8n Automation Pipeline (Port 5678)]
-      ├─ 1. Webhook Trigger (`POST /webhook/impact-circles-ai-automation`)
-      ├─ 2. Validate Request & Shared Secret (`x-webhook-secret` - fails closed on error)
-      ├─ 3. Early Idempotency Fast-Path: Checks Neon Postgres for `idempotencyKey`
-      │      └─ If match exists: returns persisted record immediately in ~270ms (bypassing AI call)
-      ├─ 4. Multimodal Extraction via Google Gemini API (`x-goog-api-key` header)
-      ├─ 5. Server-side Extraction Schema & Arithmetic Sanity Validation ($0.02 tolerance)
-      ├─ 6. Duplicate Detection Query against Neon PostgreSQL (Parameterized $1..$N SQL)
-      ├─ 7. Single-Ownership Persistence with Idempotency (INSERT ... ON CONFLICT DO UPDATE)
-      ├─ 8. Respond to Webhook with 201 Created + Persisted Record
-      └─ 9. Unified Error Handler: routes Gemini/DB/validation errors to safe HTTP statuses
-      │
-      ▼
-[Next.js Client UI]
-      └─ Displays updated expense table, validation badges, subtotal, and issue inspector modal
+[User Browser / Reviewer]
+    │
+    ├─► Drag & Drop Invoices ──► [POST /api/invoices]
+    │                                 │ (Magic bytes & 10MB bounds check)
+    │                                 ├─► [n8n Webhook / Direct Pipeline Fallback]
+    │                                 │     ├─► Google Gemini API (Structured JSON extraction)
+    │                                 │     ├─► Currency & Arithmetic Reconciliation ($0.02)
+    │                                 │     ├─► Duplicate Detection Query
+    │                                 │     └─► Neon PostgreSQL (Prisma 7)
+    │                                 ▼
+    │                          [Expense Ledger, Category Breakdown & CSV Export]
+    │
+    └─► Prompt / Generate   ──► [POST /api/content/generate]
+                                      │ (Drafts 3 channels: Website CMS, LinkedIn, Newsletter)
+                                      ▼
+                                [Human Review & Passcode Guard]
+                                      │ (Server-enforced approval; edits reset to in_review)
+                                      ▼
+                                [POST /api/content/[id]/publish]
+                                      │ (Real HTTP fetch with Bearer auth to Sandbox)
+                                      ├─► POST /api/sandbox/cms/posts        ──► /sandbox/news/[slug]
+                                      ├─► POST /api/sandbox/linkedin/posts   ──► /sandbox/linkedin/[id]
+                                      └─► POST /api/sandbox/newsletter/send  ──► /sandbox/newsletter/[id]
 ```
 
 ---
 
-## 1. Prerequisites
+## Technology Stack
 
-- **Node.js**: v20+ or v24+ (Node v24.21.0 recommended; tested on Windows x64).
-- **PostgreSQL / Neon**: A serverless Neon PostgreSQL database with connection pooling and direct connection URLs.
-- **Google Gemini API**: A valid API key from [Google AI Studio](https://aistudio.google.com/).
-- **n8n**: Installed globally (`npm install -g n8n`) or executed on demand via `npx n8n`.
+- **Framework**: Next.js 16 App Router (React 19, Tailwind CSS, Turbopack).
+- **Database & ORM**: PostgreSQL on Neon with connection pooling via Prisma 7 (`@prisma/adapter-pg`).
+- **AI Multimodal Extraction & Generation**: Google Gemini API (`gemini-flash-latest` / `gemini-3.1-flash-lite`).
+- **Workflow Automation**: n8n workflow orchestration with direct pipeline fallback when n8n is offline.
+- **Verification**: Node.js native test runner (89 passing unit tests across 12 suites).
 
 ---
 
-## 2. Installation
+## Quick Start
 
-Clone the repository and install dependencies:
+### 1. Clone & Install Dependencies
 
-```powershell
+```bash
 git clone https://github.com/Ahmed-Abd-EL-Kareem/impact-circles-ai-automation.git
 cd impact-circles-ai-automation
 npm install
 ```
 
-### Dependency & Prisma 7 Notes:
-- Prisma version is aligned across `@prisma/client@^7.10.1`, `@prisma/adapter-pg@^7.10.1`, and `prisma@^7.10.1`.
-- In Prisma 7, connection URLs are defined in `prisma.config.ts`, and runtime connection pooling uses `@prisma/adapter-pg` + `pg`.
+### 2. Configure Environment Variables
 
----
+Copy the example environment file:
 
-## 3. Environment Configuration
+```bash
+# macOS / Linux
+cp .env.example .env
 
-Copy the example environment file to `.env`:
-
-```powershell
-Copy-Item .env.example .env
+# Windows (Command Prompt / PowerShell)
+copy .env.example .env
 ```
 
-Edit `.env` and fill in your actual credentials:
+Edit `.env` with your credentials:
 
 ```env
-# Database (Neon PostgreSQL)
-DATABASE_URL="postgresql://neondb_owner:YOUR_PASSWORD@ep-pooler.us-east-1.aws.neon.tech/neondb?sslmode=require"
-DIRECT_URL="postgresql://neondb_owner:YOUR_PASSWORD@ep-direct.us-east-1.aws.neon.tech/neondb?sslmode=require"
-
-# Google Gemini API
-# Supported multimodal models: gemini-flash-latest, gemini-3.1-flash-lite
-GEMINI_API_KEY="YOUR_GEMINI_API_KEY"
+DATABASE_URL="postgresql://user:password@ep-xxxx.region.aws.neon.tech/neondb?sslmode=require"
+DIRECT_URL="postgresql://user:password@ep-xxxx.region.aws.neon.tech/neondb?sslmode=require"
+GEMINI_API_KEY="your-google-gemini-api-key"
 GEMINI_MODEL="gemini-flash-latest"
 
-# n8n Automation
-N8N_BASE_URL="http://localhost:5678"
+# Sandbox Publishing
+SANDBOX_BASE_URL="http://localhost:3000"
+SANDBOX_API_KEY="sandbox_demo_secret_key"
+SANDBOX_FAIL_CHANNELS=""
+
+# Optional Reviewer Passcode (guards PATCH, approve, and publish routes; skipped if unset)
+REVIEWER_PASSCODE=""
+
+# Optional n8n Webhook (if unset, app automatically uses built-in direct pipeline fallback)
 N8N_WEBHOOK_URL="http://localhost:5678/webhook/impact-circles-ai-automation"
-N8N_WEBHOOK_SECRET="your-secure-random-secret-key"
+N8N_WEBHOOK_SECRET="your-webhook-shared-secret"
 ```
 
-> **Important**: Do not commit your `.env` file. Keep all credentials server-side.
+### 3. Initialize Database & Run
 
----
-
-## 4. Neon PostgreSQL Setup & Migrations
-
-To apply database migrations to your Neon database:
-
-```powershell
-# Generate Prisma Client
+```bash
 npx prisma generate
-
-# Check migration status
-npx prisma migrate status
-
-# Apply pending migrations to Neon
 npx prisma migrate deploy
-```
-
-The database schema defines the `Expense` model with the following fields and indexes:
-- `id` (String primary key)
-- `idempotencyKey` (String unique nullable — enforces request-level idempotency)
-- `expenseDate` (DateTime nullable)
-- `vendor` (String nullable)
-- `invoiceNumber` (String nullable)
-- `description` (String nullable)
-- `subtotalAmount` (Decimal 12,2 nullable — stores pre-tax amount)
-- `amount` (Decimal 12,2 nullable — stores total amount)
-- `currency` (String nullable)
-- `taxAmount` (Decimal 12,2 nullable)
-- `category` (String: `personnel`, `travel`, `equipment`, `software`, `events`, `operational`, `uncategorized`)
-- `validationStatus` (String: `valid`, `needs_review`, `duplicate_suspected`, `processing_failed`)
-- `validationIssues` (JSONB structured list of detected anomalies)
-- `sourceFileName` (String)
-- `createdAt` & `updatedAt` (DateTime)
-- Indexes on `[vendor, invoiceNumber]`, `[validationStatus]`, `[createdAt]`, `[expenseDate]`, `[category]`.
-
----
-
-## 5. How to Run Next.js Locally
-
-Start the Next.js development server:
-
-```powershell
 npm run dev
 ```
 
@@ -135,178 +99,72 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 ---
 
-## 6. How to Run n8n Locally
+## 5-Minute Demo Script
 
-Open a new PowerShell terminal and run:
+### Part 1: Finance Ingestion & Validation
+1. **Upload Valid Invoice**: On the Finance tab, drag and drop `test-fixtures/fictional-invoice-usd.pdf`. Observe Gemini extraction, automatic status `auto_approved`, subtotal/tax reconciliation, and ledger display.
+2. **Duplicate Detection**: Upload the same file again. The system detects matching vendor, invoice number, amount, and currency, assigning status `duplicate_suspected` without corrupting totals.
+3. **Missing Fields**: Upload `test-fixtures/fictional-missing-fields-invoice.pdf`. The system assigns status `needs_review` and flags missing fields.
+4. **Category Breakdown**: View the breakdown table grouped strictly by category and currency (zero cross-currency addition).
+5. **CSV Export**: Click "Export CSV" to download the RFC 4180 compliant expense file.
 
-```powershell
-# Load .env into the PowerShell session
-Get-Content .env | Where-Object { $_ -match '^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$' } | ForEach-Object {
-  [System.Environment]::SetEnvironmentVariable($matches[1], $matches[2].Trim('"', "'"))
-}
-
-# Allow Code nodes to read environment variables (for shared secret verification)
-$env:N8N_BLOCK_ENV_ACCESS_IN_NODE="false"
-
-# Start n8n
-npx n8n
-```
-
-n8n will start and be accessible at [http://localhost:5678](http://localhost:5678).
-
----
-
-## 7. How to Import and Configure the Finance Workflow in n8n
-
-### Option A: Automatic Sync (Recommended)
-If n8n is running locally with SQLite storage (`~/.n8n/database.sqlite`), you can sync the workflow definition instantly:
-```powershell
-npm run workflow:sync
-```
-
-### Option B: Manual UI Import
-1. Open your browser and navigate to `http://localhost:5678`.
-2. In the left navigation, click **Workflows** → **Import from File**.
-3. Select the file:
-   `n8n/workflows/finance-processing.json`
-4. Set up the **Neon Postgres** credentials in n8n:
-   - In n8n, go to **Credentials** → **New Credential** → **Postgres**.
-   - Name it `Neon Postgres (Database)`.
-   - Host: Extract from your `DIRECT_URL` (e.g. `ep-holy-bar-b7wwyz9k.c-13.us-east-1.aws.neon.tech`).
-   - Database: `neondb`
-   - User: `neondb_owner`
-   - Password: Your Neon database password.
-   - Port: `5432`
-   - SSL: `Require` / `Verify-Full`
-5. Connect all Postgres nodes in the workflow (`Check Existing Idempotency in Postgres`, `Check Duplicate in Neon Postgres`, and `Persist Expense into Neon Postgres`) to your credential.
-6. Ensure the workflow is **Activated** (toggle switch in the top right to **Active**).
+### Part 2: Content Generation, Human Review & Sandbox Publishing
+1. **Generate**: Switch to "Content Agent" tab. Enter an announcement prompt (e.g., *"Community solar research paper findings"*) and click "Generate Multi-Channel Content".
+2. **Human Approval Enforcement**: Attempting to publish before approval returns `400 Bad Request`.
+3. **Review & Passcode**: Click "Review & Approve". If `REVIEWER_PASSCODE` is set, enter the passcode when prompted (persisted in `sessionStorage`).
+4. **Reset on Edit**: Edit any channel copy. Notice the status reverts to `in_review`, requiring re-approval before publishing.
+5. **Sandbox Dispatch**: Approve and click "Publish to Sandbox". Real HTTP calls dispatch each channel to the mock platform API.
+6. **Live Preview**: Click the returned sandbox URLs to view the published output on `/sandbox/news/[slug]`, `/sandbox/linkedin/[id]`, or `/sandbox/newsletter/[id]`.
+7. **Failure Simulation & Retry**: Set `SANDBOX_FAIL_CHANNELS="linkedin"` in `.env`, trigger publish on a new post to observe `partially_published`, then clear the variable and click "Retry Failed Channels" to dispatch only the failed channel.
 
 ---
 
-## 8. Testing & Quality Verification
+## How This Connects to Production
 
-### Run Unit Tests
-A comprehensive test suite of 55 unit tests across 7 suites:
+| Channel | Sandbox Implementation | Production Integration Path |
+| :--- | :--- | :--- |
+| **Website CMS** | `POST /api/sandbox/cms/posts` | WordPress REST API (`POST /wp-json/wp/v2/posts`) using Application Passwords or OAuth 2.0 Bearer tokens, or headless CMS webhook (Contentful, Strapi). |
+| **LinkedIn** | `POST /api/sandbox/linkedin/posts` | LinkedIn Posts API (`POST https://api.linkedin.com/rest/posts`) authenticated via 3-legged OAuth 2.0 with `w_member_social` or `w_organization_social` scope. |
+| **Newsletter** | `POST /api/sandbox/newsletter/send` | Email Service Provider APIs such as Mailchimp Campaigns API (`POST /3.0/campaigns`) or Brevo/Sendinblue Transactional API (`POST /v3/smtp/email`). |
 
-```powershell
-npm test
-```
+---
 
-Covers:
-- **File Validation** (`tests/unit/validation-file.test.ts`): Binary magic-byte inspection (%PDF-, PNG, JPEG), 10MB bounds, and spoofed extension rejection.
-- **Extraction Validation** (`tests/unit/validation-extraction.test.ts`): Structured extraction schema validation, arithmetic reconciliation ($0.02 tolerance), UTC calendar validation, and honest nulls.
-- **Duplicate Detection** (`tests/unit/duplicate-detection.test.ts`): Primary candidate matching, secondary missing-invoice-number matching, and mismatch immunity.
-- **Multi-Currency** (`tests/unit/finance-summary.test.ts`): Strict currency isolation and zero cross-currency addition.
-- **Workflow Client** (`tests/unit/workflow-client.test.ts`): n8n offline 503 handling, 401 secret rejection, upstream error propagation, and response verification.
-- **Webhook Authentication & Fail-Closed Guardrails** (`tests/unit/webhook-auth.test.ts`): Fail-closed 500 when secret is unconfigured/empty, 401 when header is missing/mismatched, 400 when payload is malformed.
-- **Request Idempotency & Concurrency** (`tests/unit/idempotency.test.ts`): Atomic replay guarantees, race condition safety, payload tampering prevention, and timeout recovery.
+## Limitations
 
-### Run Integration Tests
-The repository provides focused integration scripts and a unified runner:
+- **Sandbox Publishing**: Uses local mock API endpoints and `/sandbox/*` public viewers to demonstrate end-to-end publishing without requiring live social media credentials.
+- **Passcode Authentication**: Uses constant-time header comparison (`x-reviewer-passcode`) for simple reviewer authorization rather than a full multi-tenant OAuth/OIDC identity system.
+- **Single-Tenant Schema**: Designed as a focused assessment vertical slice rather than a multi-organization SaaS architecture.
+- **API Rate Limits**: Subject to Google Gemini API quota limits (default configured model: `gemini-flash-latest`).
+- **Automation Runner**: n8n provides external visual orchestration; if n8n is offline or unconfigured, the app falls back to an internal direct pipeline (`src/lib/services/pipeline.ts`).
 
-```powershell
-# Run the direct TypeScript pipeline against real Gemini & Neon PostgreSQL
-npm run test:direct
+---
 
-# Run the true production n8n End-to-End test (requires n8n on port 5678)
-npm run test:e2e
+## Sample Outputs Directory (`sample-outputs/`)
 
-# Run the complete integration suite (both suites sequentially)
-npm run test:integration
-```
+Generated using fictional test fixtures via `npm run export:samples`:
 
-The production n8n E2E suite (`npm run test:e2e`):
-1. Confirms live n8n server health (fails immediately with exit code 1 if n8n is offline — zero false positives).
-2. Verifies fail-closed authentication: rejects invalid secrets with HTTP 401.
-3. Verifies payload guardrails: rejects malformed bodies with HTTP 400.
-4. Ingests `test-fixtures/fictional-invoice.pdf` and verifies HTTP 201 response with verified persisted record.
-5. Asserts n8n request idempotency replay (identical record returned, zero count increment).
-6. Submits business duplicate and verifies `duplicate_suspected` flag and candidate ID capture.
-7. Verifies multi-currency summary calculation.
-8. Automatically cleans up test records from Neon PostgreSQL.
+- `sample-outputs/expenses.csv` — RFC 4180 CSV export of ingested invoices.
+- `sample-outputs/finance-summary.json` — Structured totals grouped by currency and category.
+- `sample-outputs/finance-summary.md` — Markdown summary report of financial metrics.
+- `sample-outputs/generated-content.json` — Full 3-channel content package (CMS markdown, LinkedIn post, newsletter).
+- `sample-outputs/publication-log.json` — Audit trail of sandbox publishing runs with live URLs and channel statuses.
 
-### Code Quality Verification
-```powershell
-# Type check
+---
+
+## Quality Verification
+
+Run the test suite and quality gates:
+
+```bash
+# Type checking
 npx tsc --noEmit
 
-# Lint check
+# Linting
 npm run lint
 
-# Turbopack build
+# Automated unit tests (89 passing tests across 12 suites)
+npm test
+
+# Production build verification
 npm run build
 ```
-
----
-
-## 9. End-to-End Manual Verification Checklist
-
-1. **Dashboard Launch**: Navigate to `http://localhost:3000`. The 4 summary cards show real database metrics.
-2. **Document Upload**:
-   - Drag and drop `test-fixtures/fictional-invoice.pdf` into the upload zone.
-   - Observe the live processing indicator.
-   - Upon completion, the new expense is added to the table with `valid` status.
-3. **Duplicate Detection**:
-   - Re-upload `test-fixtures/fictional-duplicate-invoice.pdf` (or the same file again).
-   - Observe that the record is persisted and marked as `duplicate_suspected`.
-4. **Validation Inspector**:
-   - Click the **Inspect** button next to any row.
-   - The drawer displays pre-tax subtotal, total, tax amount, idempotency key, and specific anomaly codes.
-5. **Filters & Pagination**:
-   - Filter by status (`valid`, `needs_review`, `duplicate_suspected`).
-   - Filter by category (`software`, `operational`, etc.).
-6. **Currency Volumes**:
-   - Inspect the **Currency Volumes** card: amounts in USD, EUR, EGP are listed with individual totals, proving that no cross-currency additions occur.
-
----
-
-## 10. Architectural Invariants
-
-- **Single Persistence Ownership**: n8n is the single orchestration and persistence owner in production; the Next.js API delegates via signed webhook and receives the persisted record.
-- **Strict SQL Parameterization**: All SQL queries use bound parameters (`$1..$N`) via `options.queryReplacement`. String interpolation of user input is strictly prohibited.
-- **Request Idempotency**: Atomic `ON CONFLICT ("idempotencyKey")` guarantees that retries return the original record without creating duplicate entries.
-- **Multi-Currency Invariant**: Cross-currency addition is strictly forbidden without real-time exchange rates. Volumes are displayed separately per currency code.
-- **Honest Null Policy**: Missing or unreadable fields remain `null` with status `needs_review`. The AI is never permitted to hallucinate invoice numbers, dates, or amounts.
-
----
-
-## 11. Phase 3 — AI Content Generation & Automated Publishing Agent
-
-Phase 3 implements the **AI Content Generation & Automated Publishing Agent** specified in the Impact Circles Technical Assessment:
-
-### Architecture & Authoritative Execution Path
-The application uses a **direct Next.js API architecture** as the single authoritative execution path for Phase 3:
-- **Frontend UI (`ContentAgentView`, `ContentGeneratorForm`, `ContentReviewModal`)** connects directly to Next.js App Router API endpoints (`/api/content`, `/api/content/[id]`, `/api/content/[id]/approve`, `/api/content/[id]/publish`).
-- **AI Generation Engine (`src/lib/content/gemini-content.ts` & `src/lib/content/content-validation.ts`)**: Directly interfaces with Google Gemini API (`gemini-flash-latest`) using structured JSON generation, enforcing contract validation across all 3 formats.
-- **Persistence (`Neon PostgreSQL` via `Prisma 7`)**: Single source of truth for content packages (`ContentPost`) and audit dispatches (`PublishingLog`).
-- **Workflow Note**: An optional reference workflow file (`n8n/workflows/content-publishing.json`) is maintained in the repository for standalone n8n experimentation with identical contract validation, but the primary, authoritative demo execution path runs through the Next.js API routes without requiring a separate n8n instance for Phase 3.
-
-### Capabilities & Workflow
-1. **Content Input**: Accepts raw research project descriptions, field milestones, research findings, or event announcements with topic/type classification.
-2. **AI Generation (Google Gemini)**: Automatically produces three tailored versions with distinct tone, structure, and formatting adhering to `src/lib/types/content.ts`:
-   - **LinkedIn Post**: Professional, engaging, hashtag-optimized with thought-leadership hooks and accurate character telemetry (`postText`, `hashtags`, `characterCount`).
-   - **Newsletter Summary**: Concise, high signal-to-noise ratio stakeholder briefing (`subject`, `previewText`, `bodyText`, `callToAction`).
-   - **Website Announcement**: Comprehensive editorial article in Markdown (`title`, `subtitle`, `slug`, `bodyMarkdown`, `tags`).
-3. **Centralized Persistence**: Stored in Neon PostgreSQL via Prisma (`ContentPost` & `PublishingLog` models) with initial status `draft`.
-4. **Human-in-the-Loop Approval Workflow**:
-   - Authorized team members review the generated versions across 3 interactive tabs.
-   - Any field (article title, copy, slug, metadata) can be edited and saved.
-   - **Strict Approval Guardrail**: Server-side enforcement guarantees publication is strictly rejected (HTTP 400) unless explicitly approved by a human reviewer.
-   - **Re-Approval Invariant**: Any edit saved to an approved or published post immediately invalidates prior approval and resets status to `in_review`, requiring renewed human approval before any further dispatch.
-5. **Honest Sandbox Demonstration Publishing**:
-   - Clicking **Publish to Selected Channels (Sandbox)** executes multi-channel automated dispatch.
-   - Dispatches in demonstration sandbox mode, recording dispatches with status `"simulated"` in `PublishingLog`.
-   - Never fabricates live publication claims: UI displays clear statuses (**Demo Completed**, **Partially Simulated**), and demonstration URLs are clearly badged as simulated references.
-   - Persists execution timestamps, status (`simulated` / `failed`), and demonstration URLs into `PublishingLog`.
-
-### Manual Verification Checklist
-1. Open [http://localhost:3000](http://localhost:3000) and click the **Content & Publishing** tab in the top navigation.
-2. Click any sample quick-pick (e.g. *Clean Water Sensor Milestone*) or paste custom research findings.
-3. Click **Generate Tailored Content**. Google Gemini produces the 3-channel content package and persists the draft to Neon PostgreSQL.
-4. The **Review & Approve** modal opens:
-   - Switch between **Website Announcement**, **LinkedIn Post**, and **Newsletter Update** tabs. Confirm all three formats contain complete, usable copy.
-   - Edit any text field and click **Save Edits**.
-   - If the post was previously approved, observe that saving edits flags that renewed approval is required (`in_review`).
-5. Attempting to publish while unapproved is rejected with a clear error alert.
-6. Click **Approve Content**. Status transitions to `Approved`.
-7. Click **Publish to Selected Channels (Sandbox)**. Automated dispatch runs, records `simulated` logs in Neon PostgreSQL, and displays example URLs with honest `(Demonstration Reference (Simulated))` badges.

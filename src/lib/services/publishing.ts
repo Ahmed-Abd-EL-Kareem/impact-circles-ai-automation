@@ -58,8 +58,16 @@ export async function publishContentPost(
     };
   }
 
-  // STRICT INVARIANT: Must be approved before publishing
-  if (post.status !== "approved") {
+  // STRICT INVARIANT: Must be approved before publishing.
+  // Allowed states: 'approved', or 'partially_published' / 'failed' for retrying failed channels.
+  // Explicit approval timestamp (approvedAt) is required in all cases.
+  const isApprovedForPublish =
+    (post.status === "approved" ||
+      post.status === "partially_published" ||
+      post.status === "failed") &&
+    post.approvedAt !== null;
+
+  if (!isApprovedForPublish) {
     return {
       success: false,
       post: formatPostRecord(post),
@@ -112,21 +120,35 @@ export async function publishContentPost(
     }
 
     // 2. Strict guardrail: requested channels must match the approved channel selection.
-    // Unapproved additional channels or altered subsets require renewed approval.
+    // When in 'approved' status, unapproved additional channels or altered subsets require renewed approval.
+    // When in 'partially_published' or 'failed' (retrying), forcedChannels must be a subset of approved channels.
     const sortedApproved = [...new Set(approvedChannels)].sort();
     const sortedRequested = [...new Set(options.forcedChannels)].sort();
 
-    const matchesApproved =
-      sortedApproved.length === sortedRequested.length &&
-      sortedApproved.every((ch, i) => ch === sortedRequested[i]);
+    if (post.status === "approved") {
+      const matchesApproved =
+        sortedApproved.length === sortedRequested.length &&
+        sortedApproved.every((ch, i) => ch === sortedRequested[i]);
 
-    if (!matchesApproved) {
-      return {
-        success: false,
-        post: formatPostRecord(post),
-        results: [],
-        error: `Channel selection mismatch: Requested channels [${sortedRequested.join(", ")}] do not match the approved channel selection [${sortedApproved.join(", ")}]. Channel modifications require renewed approval before publication.`,
-      };
+      if (!matchesApproved) {
+        return {
+          success: false,
+          post: formatPostRecord(post),
+          results: [],
+          error: `Channel selection mismatch: Requested channels [${sortedRequested.join(", ")}] do not match the approved channel selection [${sortedApproved.join(", ")}]. Channel modifications require renewed approval before publication.`,
+        };
+      }
+    } else {
+      // In partially_published / failed (retry mode), all requested channels must be in approvedChannels
+      const unapprovedChannel = sortedRequested.find((ch) => !approvedChannels.includes(ch));
+      if (unapprovedChannel) {
+        return {
+          success: false,
+          post: formatPostRecord(post),
+          results: [],
+          error: `Channel selection mismatch: Requested channel '${unapprovedChannel}' is not part of the approved channel selection [${sortedApproved.join(", ")}]. Channel modifications require renewed approval before publication.`,
+        };
+      }
     }
 
     channelsToPublish = sortedRequested as PublishChannel[];
@@ -170,9 +192,32 @@ export async function publishContentPost(
     console.warn("Failed to parse stored JSON channel content, using fallback formatting:", err);
   }
 
+  // 3. Skip channels that already have a successful log (no double publish).
+  // Retrying republishes only failed channels.
+  const successfulLogsByChannel = new Map<PublishChannel, PublishingLog>();
+  for (const log of post.publishingLogs || []) {
+    if (log.status === "published" || log.status === "success") {
+      successfulLogsByChannel.set(log.channel as PublishChannel, log);
+    }
+  }
+
+  const channelsToDispatch = channelsToPublish.filter((ch) => !successfulLogsByChannel.has(ch));
   const results: ChannelPublishResult[] = [];
 
-  for (const channel of channelsToPublish) {
+  // Include skipped channels that were already published successfully
+  for (const ch of channelsToPublish) {
+    if (successfulLogsByChannel.has(ch)) {
+      const existingLog = successfulLogsByChannel.get(ch)!;
+      results.push({
+        channel: ch,
+        status: existingLog.status as PublishLogStatus,
+        publishedUrl: existingLog.publishedUrl,
+        responsePayload: (existingLog.responsePayload as Record<string, unknown>) || undefined,
+      });
+    }
+  }
+
+  for (const channel of channelsToDispatch) {
     const channelResult = await dispatchToChannel(channel, {
       postId: post.id,
       title: post.title,
@@ -195,35 +240,45 @@ export async function publishContentPost(
     });
   }
 
-  const anyFailed = results.some((r) => r.status === "failed");
-  const allFailed = results.every((r) => r.status === "failed");
+  const allSuccessfulChannelNames = new Set<string>([
+    ...Array.from(successfulLogsByChannel.keys()),
+    ...results.filter((r) => r.status === "published" || r.status === "success").map((r) => r.channel),
+  ]);
+
+  const allApprovedSuccessful = approvedChannels.every((ch) => allSuccessfulChannelNames.has(ch));
+  const anyApprovedSuccessful = approvedChannels.some((ch) => allSuccessfulChannelNames.has(ch));
 
   let finalStatus: "published" | "partially_published" | "failed" = "published";
-  if (allFailed) {
-    finalStatus = "failed";
-  } else if (anyFailed) {
+  if (allApprovedSuccessful) {
+    finalStatus = "published";
+  } else if (anyApprovedSuccessful) {
     finalStatus = "partially_published";
+  } else {
+    finalStatus = "failed";
   }
 
   const updatedPost = await prisma.contentPost.update({
     where: { id: post.id },
     data: {
       status: finalStatus,
-      publishedAt: new Date(),
+      publishedAt:
+        finalStatus === "published"
+          ? new Date()
+          : post.publishedAt || (anyApprovedSuccessful ? new Date() : null),
     },
     include: { publishingLogs: true },
   });
 
   return {
-    success: !allFailed,
+    success: anyApprovedSuccessful,
     post: formatPostRecord(updatedPost),
     results,
   };
 }
 
 /**
- * Dispatches publication to a specific channel:
- * Uses live endpoint if configured in environment, otherwise uses verified demonstration sandbox.
+ * Dispatches publication to a specific channel via real HTTP call to the sandbox endpoint
+ * or external live webhook if configured.
  */
 async function dispatchToChannel(
   channel: PublishChannel,
@@ -235,186 +290,96 @@ async function dispatchToChannel(
     website: WebsiteAnnouncementContent | null;
   }
 ): Promise<ChannelPublishResult> {
-  const timestamp = new Date().toISOString();
+  const baseUrl = (process.env.SANDBOX_BASE_URL || "http://localhost:3000").replace(/\/+$/, "");
+  const apiKey = process.env.SANDBOX_API_KEY || "sandbox_demo_secret_key";
+  const defaultHeaders = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${apiKey}`,
+  };
 
-  switch (channel) {
-    case "website": {
-      const cmsUrl = process.env.CMS_WEBHOOK_URL || process.env.WORDPRESS_API_URL;
-      if (cmsUrl) {
-        try {
-          const res = await fetch(cmsUrl, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              title: payload.website?.title || payload.title,
-              content: payload.website?.bodyMarkdown,
-              slug: payload.website?.slug,
-              tags: payload.website?.tags,
-            }),
-          });
-          if (res.ok) {
-            const data = await res.json().catch(() => ({}));
-            return {
-              channel: "website",
-              status: "success",
-              publishedUrl: data.url || `${cmsUrl.replace(/\/api.*$/, "")}/${payload.website?.slug || payload.postId}`,
-              responsePayload: data,
-            };
-          }
-          return {
-            channel: "website",
-            status: "failed",
-            publishedUrl: null,
-            errorMessage: `CMS API responded with ${res.status}: ${await res.text()}`,
-          };
-        } catch (e) {
-          return {
-            channel: "website",
-            status: "failed",
-            publishedUrl: null,
-            errorMessage: e instanceof Error ? e.message : "CMS network connection failed",
-          };
-        }
-      }
+  try {
+    let url = "";
+    let bodyData: unknown = {};
 
-      // Demonstration / Sandbox Publishing Mode
-      const slug = payload.website?.slug || `post-${payload.postId.slice(0, 8)}`;
-      const demoUrl = `https://impactcircles.org/announcements/${slug}`;
-      return {
-        channel: "website",
-        status: "simulated",
-        publishedUrl: demoUrl,
-        responsePayload: {
-          mode: "sandbox_demonstration",
-          provider: "Impact Circles Website CMS (Demo Sandbox)",
-          publishedAt: timestamp,
-          slug,
-          isSimulation: true,
-          notice: "Simulated sandbox dispatch. External publication was not executed.",
+    switch (channel) {
+      case "website": {
+        url = process.env.CMS_WEBHOOK_URL || process.env.WORDPRESS_API_URL || `${baseUrl}/api/sandbox/cms/posts`;
+        bodyData = {
+          title: payload.website?.title || payload.title,
+          slug: payload.website?.slug,
+          content: payload.website?.bodyMarkdown,
+          status: "publish",
           tags: payload.website?.tags || [],
-        },
-      };
-    }
-
-    case "linkedin": {
-      const linkedinWebhook = process.env.LINKEDIN_WEBHOOK_URL;
-      if (linkedinWebhook) {
-        try {
-          const res = await fetch(linkedinWebhook, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              text: payload.linkedin?.postText,
-              hashtags: payload.linkedin?.hashtags,
-            }),
-          });
-          if (res.ok) {
-            const data = await res.json().catch(() => ({}));
-            return {
-              channel: "linkedin",
-              status: "success",
-              publishedUrl: data.shareUrl || `https://linkedin.com/feed/update/urn:li:share:${payload.postId}`,
-              responsePayload: data,
-            };
-          }
-          return {
-            channel: "linkedin",
-            status: "failed",
-            publishedUrl: null,
-            errorMessage: `LinkedIn webhook responded with ${res.status}`,
-          };
-        } catch (e) {
-          return {
-            channel: "linkedin",
-            status: "failed",
-            publishedUrl: null,
-            errorMessage: e instanceof Error ? e.message : "LinkedIn connection failed",
-          };
-        }
+        };
+        break;
       }
-
-      // Demonstration / Sandbox Publishing Mode
-      const shareId = `ic_li_${payload.postId.slice(-8)}`;
-      return {
-        channel: "linkedin",
-        status: "simulated",
-        publishedUrl: `https://linkedin.com/feed/update/urn:li:share:${shareId}`,
-        responsePayload: {
-          mode: "sandbox_demonstration",
-          provider: "LinkedIn REST API (Demo Sandbox)",
-          publishedAt: timestamp,
-          isSimulation: true,
-          notice: "Simulated sandbox dispatch. External publication was not executed.",
+      case "linkedin": {
+        url = process.env.LINKEDIN_WEBHOOK_URL || `${baseUrl}/api/sandbox/linkedin/posts`;
+        bodyData = {
+          text: payload.linkedin?.postText || payload.title,
           hashtags: payload.linkedin?.hashtags || [],
-          characterCount: payload.linkedin?.characterCount || 0,
-        },
-      };
-    }
-
-    case "newsletter": {
-      const newsletterWebhook = process.env.NEWSLETTER_WEBHOOK_URL;
-      if (newsletterWebhook) {
-        try {
-          const res = await fetch(newsletterWebhook, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              subject: payload.newsletter?.subject || payload.title,
-              body: payload.newsletter?.bodyText,
-              preview: payload.newsletter?.previewText,
-              cta: payload.newsletter?.callToAction,
-            }),
-          });
-          if (res.ok) {
-            const data = await res.json().catch(() => ({}));
-            return {
-              channel: "newsletter",
-              status: "success",
-              publishedUrl: data.campaignUrl || `https://impactcircles.org/newsletter/${payload.postId}`,
-              responsePayload: data,
-            };
-          }
-          return {
-            channel: "newsletter",
-            status: "failed",
-            publishedUrl: null,
-            errorMessage: `Newsletter webhook responded with ${res.status}`,
-          };
-        } catch (e) {
-          return {
-            channel: "newsletter",
-            status: "failed",
-            publishedUrl: null,
-            errorMessage: e instanceof Error ? e.message : "Newsletter connection failed",
-          };
-        }
+        };
+        break;
       }
-
-      // Demonstration / Sandbox Publishing Mode
-      return {
-        channel: "newsletter",
-        status: "simulated",
-        publishedUrl: `https://impactcircles.org/newsletter/edition-${payload.postId.slice(0, 8)}`,
-        responsePayload: {
-          mode: "sandbox_demonstration",
-          provider: "Impact Circles Newsletter Broadcaster (Demo Sandbox)",
-          publishedAt: timestamp,
-          isSimulation: true,
-          notice: "Simulated sandbox dispatch. External publication was not executed.",
+      case "newsletter": {
+        url = process.env.NEWSLETTER_WEBHOOK_URL || `${baseUrl}/api/sandbox/newsletter/send`;
+        bodyData = {
           subject: payload.newsletter?.subject || payload.title,
-          callToAction: payload.newsletter?.callToAction || "",
-        },
-      };
+          preview: payload.newsletter?.previewText || "",
+          body: payload.newsletter?.bodyText || "",
+          cta: payload.newsletter?.callToAction || "",
+        };
+        break;
+      }
     }
 
-    default: {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: defaultHeaders,
+      body: JSON.stringify(bodyData),
+      signal: AbortSignal.timeout(10000),
+    });
+
+    if (res.ok) {
+      const data = await res.json().catch(() => ({}));
+      const link =
+        typeof data.link === "string"
+          ? data.link
+          : typeof data.url === "string"
+          ? data.url
+          : typeof data.shareUrl === "string"
+          ? data.shareUrl
+          : `${baseUrl}/sandbox/${channel === "website" ? "news" : channel}/${payload.postId}`;
+
       return {
         channel,
-        status: "failed",
-        publishedUrl: null,
-        errorMessage: `Unsupported channel '${String(channel)}'. Supported channels are: website, linkedin, newsletter.`,
+        status: "published",
+        publishedUrl: link,
+        responsePayload: data,
       };
     }
+
+    const errorBody = await res.text().catch(() => res.statusText);
+    return {
+      channel,
+      status: "failed",
+      publishedUrl: null,
+      errorMessage: `${channel.toUpperCase()} API responded with ${res.status}: ${errorBody}`,
+    };
+  } catch (err: unknown) {
+    const errorMsg =
+      err instanceof Error
+        ? err.name === "TimeoutError"
+          ? `${channel.toUpperCase()} dispatch timed out after 10000ms`
+          : err.message
+        : `${channel.toUpperCase()} network dispatch failed`;
+
+    return {
+      channel,
+      status: "failed",
+      publishedUrl: null,
+      errorMessage: errorMsg,
+    };
   }
 }
 

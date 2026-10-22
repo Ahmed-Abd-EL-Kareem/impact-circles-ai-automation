@@ -1,0 +1,42 @@
+{
+  "totalExpenses": 3,
+  "validCount": 1,
+  "needsReviewCount": 2,
+  "duplicateSuspectedCount": 1,
+  "byCurrency": [
+    {
+      "currency": "USD",
+      "count": 2,
+      "totalAmount": "330.00"
+    },
+    {
+      "currency": "EUR",
+      "count": 1,
+      "totalAmount": "85.00"
+    }
+  ],
+  "byCategory": [
+    {
+      "category": "software",
+      "count": 2
+    },
+    {
+      "category": "equipment",
+      "count": 1
+    }
+  ],
+  "byCategoryAndCurrency": [
+    {
+      "category": "equipment",
+      "currency": "EUR",
+      "count": 1,
+      "totalAmount": "85.00"
+    },
+    {
+      "category": "software",
+      "currency": "USD",
+      "count": 2,
+      "totalAmount": "330.00"
+    }
+  ]
+}

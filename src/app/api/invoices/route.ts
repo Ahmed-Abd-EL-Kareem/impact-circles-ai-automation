@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { validateFileBuffer } from "@/lib/validation/file";
 import { dispatchToN8nWorkflow } from "@/lib/services/workflow-client";
+import { executeDocumentPipelineDirect } from "@/lib/services/pipeline";
 import { prisma } from "@/lib/db";
-import { ExpenseCategory, ValidationStatus } from "@/lib/types/expense";
+import { ExpenseCategory, ExpenseRecord, ValidationStatus } from "@/lib/types/expense";
 import { Prisma } from "@prisma/client";
 
 /**
@@ -104,13 +105,32 @@ export async function POST(req: NextRequest) {
 
     const validatedFile = validationResult.file;
 
-    // 4. Dispatch to n8n automation workflow (primary persistence owner)
-    const result = await dispatchToN8nWorkflow({
-      buffer: validatedFile.buffer,
-      fileName: validatedFile.fileName,
-      mimeType: validatedFile.mimeType,
-      idempotencyKey: idempotencyKey || undefined,
-    });
+    // 4. Dispatch to n8n automation workflow (primary persistence owner) or direct pipeline fallback
+    let result:
+      | { success: true; expense: ExpenseRecord }
+      | { success: false; error: string; statusCode?: number };
+
+    if (!process.env.N8N_WEBHOOK_URL) {
+      const directResult = await executeDocumentPipelineDirect({
+        buffer: validatedFile.buffer,
+        fileName: validatedFile.fileName,
+        mimeType: validatedFile.mimeType,
+        idempotencyKey: idempotencyKey || undefined,
+      });
+
+      if (directResult.success) {
+        result = { success: true, expense: directResult.expense };
+      } else {
+        result = { success: false, error: directResult.error, statusCode: 500 };
+      }
+    } else {
+      result = await dispatchToN8nWorkflow({
+        buffer: validatedFile.buffer,
+        fileName: validatedFile.fileName,
+        mimeType: validatedFile.mimeType,
+        idempotencyKey: idempotencyKey || undefined,
+      });
+    }
 
     if (!result.success) {
       return NextResponse.json(
