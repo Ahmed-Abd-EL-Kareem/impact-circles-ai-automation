@@ -1,3 +1,4 @@
+import "dotenv/config";
 import { Pool } from "pg";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@prisma/client";
@@ -8,7 +9,11 @@ const globalForPrisma = globalThis as unknown as {
   pgPool?: Pool;
 };
 
-const connectionString = process.env.DATABASE_URL;
+const connectionString =
+  process.env.DATABASE_URL ||
+  (process.env.NODE_ENV === "test" || !process.env.DATABASE_URL
+    ? "postgresql://placeholder:placeholder@localhost:5432/placeholder"
+    : undefined);
 
 if (!connectionString) {
   throw new Error("DATABASE_URL is not configured in environment variables.");

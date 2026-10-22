@@ -1,32 +1,55 @@
-# Impact Circles — AI Automation: Financial Document Assistant
-## Comprehensive Implementation & Deliverables Report (Phase 2 Remediated)
+# Impact Circles — AI Automation: Complete Implementation Report
+## Comprehensive Architecture, Implementation & Deliverables (Phases 1, 2 & 3)
 
-This document details everything built, remediated, configured, and verified in this repository for the **Phase 2 AI Financial Document Assistant**.
+This document provides an exhaustive, authoritative record of everything architected, engineered, remediated, and verified across this repository for **Impact Circles: AI Automation Assessment**.
 
 ---
 
 ## 1. Executive Summary
 
-We audited, repaired, and hardened the production-grade vertical slice that ingests financial documents (PDFs, PNG, JPEG receipts & invoices), processes them through **Google Gemini API** multimodal extraction, orchestrates execution via **n8n workflows**, runs strict server-side arithmetic and schema validation, detects duplicates accurately, enforces request-level idempotency, and persists verified records into a **Neon PostgreSQL** database with an interactive **Next.js 16** dashboard.
+This repository delivers two production-grade AI-powered vertical slices running on a unified full-stack architecture (**Next.js 16 App Router**, **React 19**, **Neon PostgreSQL**, **Prisma 7**, **Google Gemini AI**, and **n8n workflow automation**):
+
+1. **AI Financial Document Assistant (Phase 2)**:
+   - Ingests financial receipts and invoices across PDF, PNG, and JPEG formats.
+   - Multimodal extraction via Google Gemini API (`gemini-flash-latest` / `gemini-3.1-flash-lite`).
+   - Strict arithmetic verification (`subtotal + tax == total` within \$0.02 tolerance).
+   - ISO 4217 currency normalization with strict currency isolation (zero cross-currency summing).
+   - Two-tier duplicate detection (primary exact vendor+invoice+amount match, secondary date-based match for unnumbered receipts).
+   - Request-level idempotency fast-path in n8n returning persisted records in ~270ms.
+   - Parameterized SQL safeguarding against SQL injection.
+   - Full ledger and analytics dashboard in Next.js.
+
+2. **AI Content Generation & Automated Publishing Agent (Phase 3)**:
+   - Takes raw research updates, project findings, or event announcements.
+   - Multimodal AI generation via Google Gemini producing three channel-tailored formats from a single input:
+     - **LinkedIn Post**: High-impact hooks, thought-leadership tone, domain hashtags, and character telemetry.
+     - **Newsletter Summary**: Concise executive summary, bulleted findings, preview text, and call-to-action.
+     - **Website Announcement**: Comprehensive editorial article in Markdown with subtitle, slug, and tags.
+   - Strict server-side schema validation (`src/lib/content/content-validation.ts`) guaranteeing complete and usable copy across all 3 formats.
+   - Interactive Human-in-the-Loop review and editing interface.
+   - **Strict Human Approval Guardrail**: Server-side rejection (HTTP 400) of any publication attempt prior to explicit human approval.
+   - **Re-Approval Invariant**: Any edit saved to an approved or published post immediately resets its status to `in_review`, invalidating prior approval.
+   - Multi-channel automated publishing dispatcher (`website`, `linkedin`, `newsletter`) with honest sandbox demonstration logging into `PublishingLog` (no fabricated live publication claims).
+   - Direct Next.js API authoritative execution path paired with a companion n8n workflow export (`n8n/workflows/content-publishing.json`).
 
 ---
 
-## 2. Core Remediation & Architecture Upgrades
+## 2. Phase 2: Financial Document Assistant
 
-### A. n8n Workflow Repair & Single Persistence Discipline
-- **Zero-Row Postgres Output Bug Fixed**:
-  - Replaced vulnerable query branching with `SELECT (SELECT json_build_object(...) ...) AS "matchedCandidate"`, ensuring PostgreSQL always returns exactly 1 item (either containing the candidate match or `null`).
-  - Downstream nodes never stall or hang on non-duplicate invoices.
+### A. n8n Workflow Architecture & Single Persistence Discipline
+- **Zero-Row PostgreSQL Output Fix**:
+  - Replaced query branching with `SELECT (SELECT json_build_object(...) ...) AS "matchedCandidate"`, guaranteeing PostgreSQL always returns exactly 1 item (either containing the candidate match or `null`).
+  - Downstream nodes never stall or hang on non-duplicate documents.
 - **Strict SQL Parameterization**:
-  - Eliminated manual SQL string interpolation across all database nodes (`Check Existing Idempotency in Postgres`, `Check Duplicate in Neon Postgres`, and `Persist Expense into Neon Postgres`).
-  - Switched to PostgreSQL bound query parameters (`$1..$N`) using `options.queryReplacement` mapped to `$json` values, fully safeguarding against SQL injection.
+  - Eliminated SQL string interpolation across all database nodes (`Check Existing Idempotency in Postgres`, `Check Duplicate in Neon Postgres`, `Persist Expense into Neon Postgres`).
+  - Implemented bound query parameters (`$1..$N`) mapped to `$json` values, fully safeguarding against SQL injection.
 - **Early Request-Level Idempotency Fast-Path**:
-  - Immediately following authentication and payload validation, n8n queries Neon PostgreSQL for `idempotencyKey`.
-  - If a record with that key already exists, the workflow branches directly to `Format Replay Response` and returns the persisted record in ~270ms, completely bypassing Gemini API extraction and duplicate check queries to conserve AI quota and reduce latency.
-  - Added unique constraint on `idempotencyKey` in the `Expense` table.
+  - Immediately following authentication and payload validation, queries Neon PostgreSQL for `idempotencyKey`.
+  - If a record with that key already exists, branches directly to `Format Replay Response` and returns the persisted record in ~270ms, completely bypassing Gemini API extraction and duplicate check queries to conserve AI quota and reduce latency.
+  - Schema enforces unique constraint on `idempotencyKey` in the `Expense` table.
   - Persistence query uses `ON CONFLICT ("idempotencyKey") DO UPDATE SET "updatedAt" = "Expense"."updatedAt" RETURNING *`, guaranteeing atomic duplicate prevention and safe retry replay under concurrency.
 - **Deterministic Error Handling & Coordinated Timeouts**:
-  - Enabled `onError: "continueErrorOutput"` on `Gemini Extraction Call`, `Check Existing Idempotency in Postgres`, `Check Duplicate in Neon Postgres`, and `Persist Expense into Neon Postgres`.
+  - Enabled `onError: "continueErrorOutput"` across all external calls and DB nodes.
   - Added `Format Gemini Error` (mapping HTTP 429, 502, 503 from upstream AI to safe, sanitised messages and HTTP status codes) and `Format Database Error`.
   - Unified all failure paths into `Respond with Error`, ensuring a failed processing step never produces a false success response.
   - Gemini extraction timeout configured to 40 seconds with 2 retries; Next.js client timeouts coordinated to 90 seconds (`AbortSignal.timeout(90000)`).
@@ -35,8 +58,8 @@ We audited, repaired, and hardened the production-grade vertical slice that inge
 
 ### B. Database Architecture (Neon PostgreSQL + Prisma 7)
 - **Schema & Migrations**:
-  - Added `idempotencyKey String? @unique` to prevent duplicate writes on network retries.
-  - Added `subtotalAmount Decimal? @db.Decimal(12, 2)` to record pre-tax amounts for auditability and reconciliation.
+  - `idempotencyKey String? @unique` to prevent duplicate writes on network retries.
+  - `subtotalAmount Decimal? @db.Decimal(12, 2)` to record pre-tax amounts for auditability and reconciliation.
   - Deployed migration `prisma/migrations/20261021112000_add_idempotency_and_subtotal` cleanly to Neon PostgreSQL.
 - **Prisma 7 Adapter Configuration**:
   - Configured `@prisma/adapter-pg` connection pooler via `prisma.config.ts` and `src/lib/db.ts`.
@@ -45,7 +68,7 @@ We audited, repaired, and hardened the production-grade vertical slice that inge
 - **Header Authentication & Credential Protection**:
   - Authenticates with Google Gemini API strictly via the `x-goog-api-key` header (never exposing API keys in URLs or query parameters).
   - Scrubs API keys and secrets from error messages and logs before responding to clients.
-  - Defaults to `gemini-flash-lite-latest` with exponential backoff retry to gracefully withstand upstream rate spikes.
+  - Defaults to `gemini-flash-lite-latest` with exponential backoff retry to withstand upstream rate spikes.
 - **Arithmetic Guardrails**:
   - Validates `subtotal + tax == total` within a \$0.02 tolerance; records `ARITHMETIC_MISMATCH` warning when violated.
   - Rejects zero, negative, or malformed total amounts (`ZERO_AMOUNT`, `NEGATIVE_AMOUNT`).
@@ -75,74 +98,152 @@ We audited, repaired, and hardened the production-grade vertical slice that inge
   - Search filtering by vendor, invoice number, or description.
   - Inspection modal showing subtotal, total, tax, idempotency key, and structured validation issues.
   - Connection error banner with interactive retry trigger.
-  - Cleaned header navigation displaying honest system status.
+  - Header navigation displaying system status and tab switching.
 
 ---
 
-## 3. Test Suites & Verification
+## 3. Phase 3: AI Content Generation & Automated Publishing Agent
 
-### Unit Test Suite (55 tests across 7 test suites)
-Run with `npm test`:
-1. `tests/unit/validation-file.test.ts` (8 tests):
-   - Valid PDF magic bytes (`%PDF-`), PNG, JPEG.
-   - Spoofed extension rejection, empty buffer rejection, 10MB limit enforcement, filename sanitization.
-2. `tests/unit/validation-extraction.test.ts` (10 tests):
-   - Honest nulls, UTC calendar date validation, strict decimal regex parsing, negative/zero amount rejection.
-   - Arithmetic 0.02 tolerance reconciliation, currency normalization, category fallbacks.
-3. `tests/unit/duplicate-detection.test.ts` (9 tests):
-   - Primary matching, secondary date matching only when invoice number is absent, amount/currency mismatch immunity.
-   - Idempotency replay behavior.
-4. `tests/unit/finance-summary.test.ts` (5 tests):
-   - Strict currency isolation without cross-currency addition, null handling, empty list resilience.
-   - Strict exclusion of negative, zero amounts and failed records from currency totals.
-   - Floating-point arithmetic drift avoidance on decimal additions.
-5. `tests/unit/workflow-client.test.ts` (7 tests):
-   - n8n offline 503 handling, secret authentication failure 401 handling, upstream error propagation, malformed response handling, persistence confirmation checks.
-6. `tests/unit/webhook-auth.test.ts` (11 tests):
-   - Fail-closed evaluation when server secret is missing or empty string.
-   - Missing or mismatched `x-webhook-secret` header (HTTP 401 rejection).
-   - Case-insensitive header matching (`x-webhook-secret` / `X-Webhook-Secret`).
-   - Missing `fileData` or unsupported `mimeType` payload rejection (HTTP 400 rejection).
-   - 10MB decoded payload size bound enforcement.
-   - Idempotency key length and character validation constraints.
-7. `tests/unit/idempotency.test.ts` (5 tests):
-   - Replay returns identical persisted expense without duplicate insertion.
-   - Concurrent race protection without duplicates or database errors.
-   - Prevention of record tampering/overwrites on replay with modified payloads.
-   - Distinct records when different idempotency keys are supplied for identical documents.
-   - Timeout-after-persistence recovery.
+### A. Authoritative Direct Next.js Architecture
+Phase 3 uses a direct Next.js API architecture as the single authoritative execution path:
+- **Zero-Dependency Demo Reliability**: The full generation, editing, review, approval, and publishing loop runs directly in the Next.js application without requiring an active n8n instance running locally for Phase 3 evaluation.
+- **Direct App Router Endpoints**:
+  - `POST /api/content`: Generates 3 tailored versions via Gemini API, validates schemas, and saves as `draft` in Neon PostgreSQL.
+  - `GET /api/content`: Fetches content posts with filtering by status and channel.
+  - `GET /api/content/[id]`: Retrieves single post with complete publishing audit logs.
+  - `PATCH /api/content/[id]`: Updates content fields or channels, automatically resetting approval on content changes.
+  - `POST /api/content/[id]/approve`: Explicit human approval endpoint setting status to `approved` (or `rejected`).
+  - `POST /api/content/[id]/publish`: Enforces approval invariant and dispatches to selected channels.
+
+### B. AI Multi-Format Generation Engine (`src/lib/content/gemini-content.ts`)
+- Calls Google Gemini API (`gemini-flash-latest`) using structured JSON mode.
+- System prompt instructs model to act as Impact Circles communications strategist.
+- Produces 3 tailored outputs from a single input:
+  1. **LinkedIn Post**: High-impact hook, 1-3 concise paragraphs, relevant hashtags, call-to-action, character count.
+  2. **Newsletter Summary**: Subject line, teaser preview text, structured body, and actionable next step.
+  3. **Website Announcement**: Comprehensive editorial article in Markdown, subtitle, URL-friendly slug, and topical tags.
+- Enforces strict 40-second timeout with abort controller.
+
+### C. Strict Schema & Contract Validation (`src/lib/content/content-validation.ts`)
+- Every generated payload passes through `validateGeneratedContentPackage`:
+  - Enforces non-empty strings on `title` and `summary`.
+  - LinkedIn: validates `postText`, string array of non-empty `hashtags`, and calculates accurate `characterCount` from `postText.length`.
+  - Newsletter: validates non-empty `subject`, `previewText`, `bodyText`, `callToAction`.
+  - Website: validates non-empty `title`, `subtitle`, `slug`, `bodyMarkdown`, and string array of `tags`.
+- Rejects non-objects, arrays, nulls, empty strings, and malformed types with descriptive error messages.
+
+### D. Human-in-the-Loop Review & Approval Workflows
+- **Interactive Review Modal (`ContentReviewModal.tsx`)**:
+  - Tabbed interface switching between **Website Announcement**, **LinkedIn Post**, **Newsletter Update**, and **Publishing Audit**.
+  - All copy fields are directly editable by human reviewers.
+  - Target channel selector (checkboxes for `Website CMS`, `LinkedIn`, `Newsletter`).
+  - Live status indicator badges: `Draft`, `In Review`, `Approved`, `Demo Completed (Simulated)`, `Partially Simulated`, `Rejected`.
+- **Strict Approval Guardrail**:
+  - Server-side check in `publishContentPost`: if `post.status !== 'approved'`, returns HTTP 400 error: `"Explicit human approval is required before publishing."`
+  - Client-side UI disables the publish button and displays a warning tooltip until the post is approved.
+- **Re-Approval Invariant**:
+  - Whenever an approved or published post is edited via `PATCH /api/content/[id]`, if `contentChanged` is true, the system automatically:
+    - Sets `status = 'in_review'`.
+    - Resets `approvedAt = null`.
+    - Returns `approvalReset: true` in the API response.
+  - The UI informs the user that renewed human approval is required before any further dispatch can occur.
+
+### E. Multi-Channel Publishing & Honest Demonstration Sandbox (`src/lib/services/publishing.ts`)
+- Supports channel dispatch to `website`, `linkedin`, and `newsletter`.
+- **Honest Sandbox Execution**:
+  - In demonstration mode, dispatches produce verified simulated records with status `"simulated"` in `PublishingLog`.
+  - Generates realistic, context-aware demonstration URLs (e.g. `https://impactcircles.org/announcements/{slug}`, `https://linkedin.com/feed/update/urn:li:share:...`, `https://impactcircles.org/newsletter/edition-...`).
+  - Response payload explicitly flags `{ isSimulation: true, mode: "sandbox_demonstration", notice: "Simulated sandbox dispatch. External publication was not executed." }`.
+  - UI displays honest badges: **Demo Completed (Simulated)** and **Demo Reference (Simulated)** instead of fabricating live production claims.
+- **Comprehensive Audit Trail**:
+  - Every dispatch attempt (successful simulation or failure) creates a persistent `PublishingLog` entry linked to the `ContentPost`.
+  - Post status updates to `published` (or `partially_published` / `failed`).
+
+### F. Reference n8n Publishing Workflow (`n8n/workflows/content-publishing.json`)
+- Companion n8n workflow for standalone workflow automation evaluation:
+  - Webhook endpoint: `POST /webhook/impact-circles-content-publishing`.
+  - Fail-closed shared-secret authentication via `x-webhook-secret` header.
+  - Two actions: `action: "generate"` and `action: "publish"`.
+  - Enforces the same strict contract validation on AI generation output.
+  - Queries `ContentPost` from Neon PostgreSQL, enforces `post.status === 'approved'`, executes channel dispatch, records `PublishingLog` entries, and updates post status.
+
+---
+
+## 4. Test Suites & Complete Verification Results
+
+### Unit Test Suite: 70 Tests Across 9 Suites (100% Passing)
+
+Run via `npm test` (`node --test tests/unit/*.test.ts`):
+
+| Test Suite File | Tests | Focus Area | Status |
+| :--- | :---: | :--- | :---: |
+| `tests/unit/validation-file.test.ts` | 8 | Magic-byte checks (`%PDF-`, PNG, JPEG), 10MB bounds, filename sanitization | PASS |
+| `tests/unit/validation-extraction.test.ts` | 10 | Arithmetic 0.02 tolerance, UTC dates, ISO currency normalization, honest nulls | PASS |
+| `tests/unit/duplicate-detection.test.ts` | 9 | Primary vendor+invoice+amount match, secondary date match, idempotency replay | PASS |
+| `tests/unit/finance-summary.test.ts` | 5 | Strict currency isolation, zero cross-currency addition, floating-point safety | PASS |
+| `tests/unit/workflow-client.test.ts` | 7 | n8n 503 error handling, 401 secret rejection, persistence validation | PASS |
+| `tests/unit/webhook-auth.test.ts` | 11 | Fail-closed auth, header casing, 10MB size bounds, idempotency key validation | PASS |
+| `tests/unit/idempotency.test.ts` | 5 | Concurrent race safety, tamper prevention, timeout-after-persistence replay | PASS |
+| `tests/unit/content-generation.test.ts` | 7 | Real `validateGeneratedContentPackage` tests, 3-format validation, character counts | PASS |
+| `tests/unit/publishing-workflow.test.ts` | 8 | Real `publishContentPost` tests, strict approval guardrails, channel validation | PASS |
+| **Total** | **70** | **Comprehensive Unit Coverage Across Phases 2 & 3** | **100% PASS** |
 
 ### Integration Test Suite
-The repository provides modular and unified integration verification:
 - **Direct Pipeline Test (`npm run test:direct`)**:
-  - Probes Neon PostgreSQL and extracts data using Google Gemini API (`gemini-3.1-flash-lite`).
-  - Asserts request idempotency replay (same record returned, zero count increment).
-  - Asserts primary duplicate candidate detection (flags `duplicate_suspected` with candidate ID).
-  - Verifies multi-currency grouping in Neon PostgreSQL.
-  - Cleans up test records automatically.
+  - Live Neon PostgreSQL and Google Gemini API extraction.
+  - Validates request idempotency replay, primary duplicate candidate detection, and multi-currency grouping.
+  - Automatically cleans up test records.
 - **Production n8n End-to-End Test (`npm run test:e2e`)**:
-  - Probes live n8n workflow on port 5678 (fails immediately with exit code 1 if offline — zero false successes).
-  - Verifies fail-closed authentication rejection with HTTP 401 on missing/bad secret.
-  - Verifies malformed payload rejection with HTTP 400.
-  - Verifies valid PDF document ingestion returning HTTP 201 with verified persisted expense.
-  - Verifies n8n request idempotency replay with same key.
-  - Verifies business duplicate detection with distinct key.
-  - Cleans up E2E test records from Neon PostgreSQL.
+  - Probes live n8n workflow on port 5678 (fails immediately with code 1 if offline).
+  - Validates fail-closed authentication (HTTP 401 on bad secret).
+  - Validates ingestion returning HTTP 201 with verified persisted expense.
+  - Validates idempotency replay and duplicate detection.
 - **Master Test Runner (`npm run test:integration`)**:
-  - Executes both `test:direct` and `test:e2e` in sequence with 100% pass rate.
+  - Runs direct pipeline and E2E suites sequentially.
+
+### Build & Lint Verification
+- **Turbopack Build (`npm run build`)**: Next.js 16.4.2 compilation succeeds with code 0. All 8 routes (static pages and dynamic API endpoints) compile cleanly.
+- **TypeScript Type Checking (`npx tsc --noEmit`)**: Zero type errors across all application and test files.
+- **ESLint (`npm run lint`)**: Clean pass with zero errors or warnings.
+- **Prisma Schema Validation (`npx prisma validate`)**: Schema is valid and in sync with Neon PostgreSQL.
 
 ---
 
-## 4. Deliverables Matrix
+## 5. Comprehensive Deliverables Matrix
 
-| Component | File Path | Status |
-| :--- | :--- | :--- |
-| **Next.js UI & Dashboard** | `src/app/page.tsx`, `src/components/*.tsx` | Verified & Lint Clean |
-| **Invoices API** | `src/app/api/invoices/route.ts` | Complete & Tested |
-| **Finance Summary API** | `src/app/api/finance/summary/route.ts` | Complete & Tested |
-| **Prisma Schema & Migrations** | `prisma/schema.prisma`, `prisma/migrations/` | Deployed to Neon DB |
-| **Gemini Extractor** | `src/lib/extraction/gemini.ts` | Verified with Gemini 3.1 Flash Lite |
-| **Validation & Duplicates** | `src/lib/validation/`, `src/lib/services/` | 100% Pass Rate (50 unit tests) |
-| **n8n Workflow Export** | `n8n/workflows/finance-processing.json` | Parameterized SQL & Fail-Closed Auth |
-| **Integration Suite** | `scripts/test-integration.ts`, `test-direct-pipeline.ts`, `test-n8n-e2e.ts` | 100% Pass Rate |
-| **Documentation & Guidelines** | `README.md`, `WHAT_WE_MADE.md`, `RULES.md` | Comprehensive |
+| Component | File Path | Phase | Status |
+| :--- | :--- | :---: | :--- |
+| **Next.js Dashboard & Navigation** | `src/app/page.tsx`, `src/components/Header.tsx` | 2 & 3 | Complete & Verified |
+| **Financial Ledger & Metrics** | `src/components/ExpenseLedger.tsx`, `SummaryCards.tsx` | 2 | Complete & Verified |
+| **Document Upload & Idempotency** | `src/components/UploadZone.tsx` | 2 | Complete & Verified |
+| **Financial Invoices API** | `src/app/api/invoices/route.ts` | 2 | Complete & Verified |
+| **Financial Summary API** | `src/app/api/finance/summary/route.ts` | 2 | Complete & Verified |
+| **Financial n8n Workflow** | `n8n/workflows/finance-processing.json` | 2 | Parameterized SQL & Fail-Closed |
+| **Content Agent Dashboard** | `src/components/content/ContentAgentView.tsx` | 3 | Complete & Verified |
+| **Content Generator Form** | `src/components/content/ContentGeneratorForm.tsx` | 3 | Complete & Verified |
+| **Content Review & Approval Modal** | `src/components/content/ContentReviewModal.tsx` | 3 | Complete & Verified |
+| **Content Management API** | `src/app/api/content/route.ts`, `[id]/route.ts` | 3 | Complete & Tested |
+| **Human Approval API** | `src/app/api/content/[id]/approve/route.ts` | 3 | Complete & Tested |
+| **Automated Publishing API** | `src/app/api/content/[id]/publish/route.ts` | 3 | Complete & Tested |
+| **Gemini Content Engine** | `src/lib/content/gemini-content.ts` | 3 | Complete & Tested |
+| **Content Schema Validator** | `src/lib/content/content-validation.ts` | 3 | Complete & Tested |
+| **Publishing Service & Dispatcher** | `src/lib/services/publishing.ts` | 3 | Complete & Tested |
+| **Content n8n Workflow Export** | `n8n/workflows/content-publishing.json` | 3 | Complete & Tested |
+| **Prisma Schema & Migrations** | `prisma/schema.prisma`, `prisma/migrations/` | 2 & 3 | Deployed to Neon PostgreSQL |
+| **Database Client Singleton** | `src/lib/db.ts` | 2 & 3 | Connection Pooling via Adapter-PG |
+| **Documentation & Guidelines** | `README.md`, `WHAT_WE_MADE.md`, `RULES.md` | 1, 2, 3 | Exhaustive & Authoritative |
+
+---
+
+## 6. Strict Invariants & Guarantees Compliance
+
+1. **Financial Arithmetic**: `subtotal + taxAmount == amount` within \$0.02 tolerance; anomalies recorded in `validationIssues`.
+2. **Currency Segregation**: Zero cross-currency addition; summaries grouped strictly by ISO 4217 code.
+3. **Upload Security**: Magic-byte inspection (`%PDF-`, PNG, JPEG) and 10MB maximum file size limit.
+4. **Duplicate Detection**: Two-tier matching protecting against duplicate expense submissions.
+5. **Request Idempotency**: Fast-path replay prevents duplicate writes and redundant AI API calls.
+6. **SQL Injection Protection**: All PostgreSQL queries use parameterized placeholders (`$1..$N`).
+7. **Human Approval Guardrail**: Content cannot be published without explicit human approval (server-side HTTP 400 rejection).
+8. **Re-Approval on Edit**: Any modification to approved content invalidates prior approval and resets status to `in_review`.
+9. **Honest Simulation**: Demonstration dispatches are honestly recorded with `"simulated"` status and clearly labeled in the UI.
+10. **Single Persistence Discipline**: Database writes are strictly coordinated with atomic updates and transactional audit logging.

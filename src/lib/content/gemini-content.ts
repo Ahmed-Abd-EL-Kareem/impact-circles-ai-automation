@@ -1,7 +1,10 @@
 import type {
   ContentKind,
   GeneratedContentPackage,
-} from "../types/content";
+} from "../types/content.ts";
+import { validateGeneratedContentPackage } from "./content-validation.ts";
+
+export { validateGeneratedContentPackage };
 
 const CONTENT_GENERATION_SYSTEM_PROMPT = `You are an expert AI communications and content strategist for "Impact Circles", an organization dedicated to technology, research, sustainability, and community impact.
 Your task is to transform research project updates, findings, or event announcements into three tailored communication formats.
@@ -141,29 +144,25 @@ ${promptText.trim()}`;
       };
     }
 
+    let parsedJson: unknown;
     try {
-      const parsedData = JSON.parse(rawText.trim()) as GeneratedContentPackage;
-
-      // Validate core required fields
-      if (!parsedData.title || !parsedData.linkedin || !parsedData.newsletter || !parsedData.website) {
-        return {
-          success: false,
-          error: "Generated content does not conform to the 3-channel specification.",
-        };
-      }
-
-      // Ensure character count is accurate
-      if (parsedData.linkedin.postText) {
-        parsedData.linkedin.characterCount = parsedData.linkedin.postText.length;
-      }
-
-      return { success: true, data: parsedData };
+      parsedJson = JSON.parse(rawText.trim());
     } catch {
       return {
         success: false,
         error: `Failed to parse Gemini response as valid JSON: ${rawText.slice(0, 100)}`,
       };
     }
+
+    const validation = validateGeneratedContentPackage(parsedJson);
+    if (!validation.isValid) {
+      return {
+        success: false,
+        error: validation.error,
+      };
+    }
+
+    return { success: true, data: validation.data };
   } catch (err: unknown) {
     if (err instanceof Error && err.name === "AbortError") {
       return { success: false, error: "Gemini API request timed out after 40 seconds." };

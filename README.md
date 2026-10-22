@@ -274,39 +274,39 @@ npm run build
 
 Phase 3 implements the **AI Content Generation & Automated Publishing Agent** specified in the Impact Circles Technical Assessment:
 
-### Capabilities & Workflow
-1. **Content Input**: Accepts raw research project descriptions, field milestones, research findings, or event announcements.
-2. **AI Generation (Google Gemini)**: Automatically produces three tailored versions with distinct tone, structure, and formatting:
-   - **LinkedIn Post**: Professional, engaging, hashtag-optimized with thought-leadership hooks and character telemetry.
-   - **Newsletter Summary**: Concise, high signal-to-noise ratio stakeholder briefing with subject, preview, body, and CTA.
-   - **Website Announcement**: Comprehensive editorial article in Markdown with headlines, deks, slug, and tags.
-3. **Centralized Persistence**: Stored in Neon PostgreSQL via Prisma (`ContentPost` & `PublishingLog` models).
-4. **Human Approval Workflow**:
-   - An authorized team member reviews the generated versions in the interactive review sheet.
-   - The team member can edit any field (title, channel copy, slug, etc.) where necessary.
-   - **Strict Approval Guardrail**: Publication cannot occur without explicit human approval.
-   - **Re-Approval Invariant**: Any edit made to an approved post immediately resets its status to `in_review`, requiring renewed approval before publishing.
-5. **Automated Publishing**:
-   - Once approved, clicking **Publish to Selected Channels** executes multi-channel automated dispatch.
-   - Dispatches to configured live CMS / social webhooks, or executes in demonstration sandbox mode generating verified URLs.
-   - Persists execution timestamps, status (`success` / `simulated` / `failed`), and published URLs into `PublishingLog`.
+### Architecture & Authoritative Execution Path
+The application uses a **direct Next.js API architecture** as the single authoritative execution path for Phase 3:
+- **Frontend UI (`ContentAgentView`, `ContentGeneratorForm`, `ContentReviewModal`)** connects directly to Next.js App Router API endpoints (`/api/content`, `/api/content/[id]`, `/api/content/[id]/approve`, `/api/content/[id]/publish`).
+- **AI Generation Engine (`src/lib/content/gemini-content.ts` & `src/lib/content/content-validation.ts`)**: Directly interfaces with Google Gemini API (`gemini-flash-latest`) using structured JSON generation, enforcing contract validation across all 3 formats.
+- **Persistence (`Neon PostgreSQL` via `Prisma 7`)**: Single source of truth for content packages (`ContentPost`) and audit dispatches (`PublishingLog`).
+- **Workflow Note**: An optional reference workflow file (`n8n/workflows/content-publishing.json`) is maintained in the repository for standalone n8n experimentation with identical contract validation, but the primary, authoritative demo execution path runs through the Next.js API routes without requiring a separate n8n instance for Phase 3.
 
-### n8n Content Publishing Workflow
-The automated workflow definition is provided in `n8n/workflows/content-publishing.json`:
-- **Webhook Endpoint**: `POST /webhook/impact-circles-content-publishing`
-- **Authentication**: Secured with `x-webhook-secret` header matching `N8N_WEBHOOK_SECRET` (fail-closed).
-- **Two Pipeline Actions**:
-  - `action: "generate"`: Calls Google Gemini API, validates and sanitizes 3 tailored channel outputs, and persists the draft into Neon PostgreSQL (`ContentPost`).
-  - `action: "publish"`: Fetches `ContentPost`, enforces strict human approval check (`status === 'approved'`), dispatches to selected channels (Website CMS, LinkedIn, Newsletter), logs results into `PublishingLog`, and updates `ContentPost` status to `published`.
-- **To Import**: Open n8n (`http://localhost:5678`), navigate to **Workflows** → **Import from File**, select `n8n/workflows/content-publishing.json`, connect the `Neon Postgres (Database)` credential, and set to **Active**.
+### Capabilities & Workflow
+1. **Content Input**: Accepts raw research project descriptions, field milestones, research findings, or event announcements with topic/type classification.
+2. **AI Generation (Google Gemini)**: Automatically produces three tailored versions with distinct tone, structure, and formatting adhering to `src/lib/types/content.ts`:
+   - **LinkedIn Post**: Professional, engaging, hashtag-optimized with thought-leadership hooks and accurate character telemetry (`postText`, `hashtags`, `characterCount`).
+   - **Newsletter Summary**: Concise, high signal-to-noise ratio stakeholder briefing (`subject`, `previewText`, `bodyText`, `callToAction`).
+   - **Website Announcement**: Comprehensive editorial article in Markdown (`title`, `subtitle`, `slug`, `bodyMarkdown`, `tags`).
+3. **Centralized Persistence**: Stored in Neon PostgreSQL via Prisma (`ContentPost` & `PublishingLog` models) with initial status `draft`.
+4. **Human-in-the-Loop Approval Workflow**:
+   - Authorized team members review the generated versions across 3 interactive tabs.
+   - Any field (article title, copy, slug, metadata) can be edited and saved.
+   - **Strict Approval Guardrail**: Server-side enforcement guarantees publication is strictly rejected (HTTP 400) unless explicitly approved by a human reviewer.
+   - **Re-Approval Invariant**: Any edit saved to an approved or published post immediately invalidates prior approval and resets status to `in_review`, requiring renewed human approval before any further dispatch.
+5. **Honest Sandbox Demonstration Publishing**:
+   - Clicking **Publish to Selected Channels (Sandbox)** executes multi-channel automated dispatch.
+   - Dispatches in demonstration sandbox mode, recording dispatches with status `"simulated"` in `PublishingLog`.
+   - Never fabricates live publication claims: UI displays clear statuses (**Demo Completed**, **Partially Simulated**), and demonstration URLs are clearly badged as simulated references.
+   - Persists execution timestamps, status (`simulated` / `failed`), and demonstration URLs into `PublishingLog`.
 
 ### Manual Verification Checklist
 1. Open [http://localhost:3000](http://localhost:3000) and click the **Content & Publishing** tab in the top navigation.
-2. Click any of the sample quick-picks (e.g. *Clean Water Sensor Milestone*) or paste custom research findings into the text area.
-3. Click **Generate Tailored Content**. Google Gemini produces the 3-channel content package in real time and persists it to Neon PostgreSQL.
-4. The **Review & Approve** modal opens automatically:
-   - Switch between **Website Announcement**, **LinkedIn Post**, and **Newsletter Update** tabs.
+2. Click any sample quick-pick (e.g. *Clean Water Sensor Milestone*) or paste custom research findings.
+3. Click **Generate Tailored Content**. Google Gemini produces the 3-channel content package and persists the draft to Neon PostgreSQL.
+4. The **Review & Approve** modal opens:
+   - Switch between **Website Announcement**, **LinkedIn Post**, and **Newsletter Update** tabs. Confirm all three formats contain complete, usable copy.
    - Edit any text field and click **Save Edits**.
-   - Notice that if the post was previously approved, saving edits flags that re-approval is required.
-5. Click **Approve Content**. The status transitions to `Approved`.
-6. Click **Publish to Selected Channels**. The automated dispatcher executes, records publication URLs (e.g. `https://impactcircles.org/announcements/...`), and displays the result in the **Publishing Audit** tab.
+   - If the post was previously approved, observe that saving edits flags that renewed approval is required (`in_review`).
+5. Attempting to publish while unapproved is rejected with a clear error alert.
+6. Click **Approve Content**. Status transitions to `Approved`.
+7. Click **Publish to Selected Channels (Sandbox)**. Automated dispatch runs, records `simulated` logs in Neon PostgreSQL, and displays example URLs with honest `(Demonstration Reference (Simulated))` badges.

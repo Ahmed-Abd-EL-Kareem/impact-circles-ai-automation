@@ -63,7 +63,8 @@ Phase 3 builds the AI Content Generation & Publishing Agent for Impact Circles a
 - Connect UI to API routes with optimistic updates, loading spinners, and error alerts.
 
 ### Task 6: Testing & End-to-End Verification
-- Run existing Phase 2 unit tests (`npm test`) — all 55 tests must continue to pass.
-- Add Phase 3 unit tests (`tests/unit/content-generation.test.ts`, `tests/unit/publishing-workflow.test.ts`).
-- Verify build (`npm run build`), lint (`npm run lint`), and TypeScript (`npx tsc --noEmit`).
-- Document all environment variables, test procedures, and setup in `README.md`.
+- Run existing Phase 1 & 2 unit tests (`npm test`) — all tests continue to pass without regression.
+- Update Phase 3 unit tests (`tests/unit/content-generation.test.ts`, `tests/unit/publishing-workflow.test.ts`) to test actual validator and publishing functions.
+- Verify 70 unit tests pass across 9 test suites.
+- Verify build (`npm run build`), lint (`npm run lint`), TypeScript (`npx tsc --noEmit`), and Prisma schema validation (`npx prisma validate`).
+- Document all environment variables, test procedures, authoritative execution path, and honest sandbox publishing in `README.md`.

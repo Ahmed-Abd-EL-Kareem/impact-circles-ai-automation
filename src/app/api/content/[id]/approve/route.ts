@@ -15,7 +15,32 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
     const body = await req.json();
     const action = body.action as "approve" | "reject";
     const rejectionReason = typeof body.rejectionReason === "string" ? body.rejectionReason.trim() : undefined;
+    const VALID_CHANNELS = ["website", "linkedin", "newsletter"];
     const targetChannels = Array.isArray(body.targetChannels) ? body.targetChannels : undefined;
+
+    if (body.targetChannels !== undefined) {
+      if (!Array.isArray(body.targetChannels) || body.targetChannels.length === 0) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: "Validation error: 'targetChannels' must be a non-empty array of supported channels.",
+          },
+          { status: 400 }
+        );
+      }
+
+      for (const ch of body.targetChannels) {
+        if (!VALID_CHANNELS.includes(ch)) {
+          return NextResponse.json(
+            {
+              success: false,
+              error: `Invalid channel '${String(ch)}'. Supported channels are: website, linkedin, newsletter.`,
+            },
+            { status: 400 }
+          );
+        }
+      }
+    }
 
     if (!["approve", "reject"].includes(action)) {
       return NextResponse.json(

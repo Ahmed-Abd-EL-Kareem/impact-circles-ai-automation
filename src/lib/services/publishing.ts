@@ -1,5 +1,6 @@
-import { prisma } from "@/lib/db";
-import { Prisma, ContentPost, PublishingLog } from "@prisma/client";
+import { prisma } from "../db.ts";
+import { Prisma } from "@prisma/client";
+import type { ContentPost, PublishingLog } from "@prisma/client";
 import type {
   ContentKind,
   ContentPostRecord,
@@ -9,7 +10,13 @@ import type {
   LinkedInPostContent,
   NewsletterContent,
   WebsiteAnnouncementContent,
-} from "../types/content";
+} from "../types/content.ts";
+
+export const SUPPORTED_CHANNELS: readonly PublishChannel[] = [
+  "website",
+  "linkedin",
+  "newsletter",
+] as const;
 
 export interface ChannelPublishResult {
   channel: PublishChannel;
@@ -77,6 +84,18 @@ export async function publishContentPost(
 
   if (channelsToPublish.length === 0) {
     channelsToPublish = ["website", "linkedin", "newsletter"];
+  }
+
+  // Validate that all channels are supported
+  for (const ch of channelsToPublish) {
+    if (!SUPPORTED_CHANNELS.includes(ch)) {
+      return {
+        success: false,
+        post: formatPostRecord(post),
+        results: [],
+        error: `Invalid channel '${String(ch)}'. Supported channels are: website, linkedin, newsletter.`,
+      };
+    }
   }
 
   // Parse structured channel contents
@@ -220,9 +239,11 @@ async function dispatchToChannel(
         publishedUrl: demoUrl,
         responsePayload: {
           mode: "sandbox_demonstration",
-          provider: "Impact Circles Website CMS (Demo API)",
+          provider: "Impact Circles Website CMS (Demo Sandbox)",
           publishedAt: timestamp,
           slug,
+          isSimulation: true,
+          notice: "Simulated sandbox dispatch. External publication was not executed.",
           tags: payload.website?.tags || [],
         },
       };
@@ -273,8 +294,10 @@ async function dispatchToChannel(
         publishedUrl: `https://linkedin.com/feed/update/urn:li:share:${shareId}`,
         responsePayload: {
           mode: "sandbox_demonstration",
-          provider: "LinkedIn REST API (Demo Integration)",
+          provider: "LinkedIn REST API (Demo Sandbox)",
           publishedAt: timestamp,
+          isSimulation: true,
+          notice: "Simulated sandbox dispatch. External publication was not executed.",
           hashtags: payload.linkedin?.hashtags || [],
           characterCount: payload.linkedin?.characterCount || 0,
         },
@@ -327,11 +350,22 @@ async function dispatchToChannel(
         publishedUrl: `https://impactcircles.org/newsletter/edition-${payload.postId.slice(0, 8)}`,
         responsePayload: {
           mode: "sandbox_demonstration",
-          provider: "Impact Circles Newsletter Broadcaster (Demo API)",
+          provider: "Impact Circles Newsletter Broadcaster (Demo Sandbox)",
           publishedAt: timestamp,
+          isSimulation: true,
+          notice: "Simulated sandbox dispatch. External publication was not executed.",
           subject: payload.newsletter?.subject || payload.title,
           callToAction: payload.newsletter?.callToAction || "",
         },
+      };
+    }
+
+    default: {
+      return {
+        channel,
+        status: "failed",
+        publishedUrl: null,
+        errorMessage: `Unsupported channel '${String(channel)}'. Supported channels are: website, linkedin, newsletter.`,
       };
     }
   }

@@ -121,9 +121,33 @@ export async function POST(req: NextRequest) {
     const promptText = typeof body.promptText === "string" ? body.promptText.trim() : "";
     const contentType = (body.contentType || "research_update") as ContentKind;
     const additionalInstructions = typeof body.additionalInstructions === "string" ? body.additionalInstructions.trim() : undefined;
-    const targetChannels = Array.isArray(body.targetChannels) && body.targetChannels.length > 0
-      ? body.targetChannels
-      : ["website", "linkedin", "newsletter"];
+    const VALID_CHANNELS = ["website", "linkedin", "newsletter"];
+    let targetChannels = ["website", "linkedin", "newsletter"];
+
+    if (body.targetChannels !== undefined) {
+      if (!Array.isArray(body.targetChannels) || body.targetChannels.length === 0) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: "Validation error: 'targetChannels' must be a non-empty array of supported channels.",
+          },
+          { status: 400 }
+        );
+      }
+
+      for (const ch of body.targetChannels) {
+        if (!VALID_CHANNELS.includes(ch)) {
+          return NextResponse.json(
+            {
+              success: false,
+              error: `Invalid channel '${String(ch)}'. Supported channels are: website, linkedin, newsletter.`,
+            },
+            { status: 400 }
+          );
+        }
+      }
+      targetChannels = body.targetChannels;
+    }
 
     if (!promptText || promptText.length < 10) {
       return NextResponse.json(

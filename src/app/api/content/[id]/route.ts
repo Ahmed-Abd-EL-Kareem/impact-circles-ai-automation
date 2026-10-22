@@ -124,13 +124,40 @@ export async function PATCH(req: NextRequest, { params }: RouteParams) {
       }
     }
 
-    if (Array.isArray(body.targetChannels)) {
+    const VALID_CHANNELS = ["website", "linkedin", "newsletter"];
+    if (body.targetChannels !== undefined) {
+      if (!Array.isArray(body.targetChannels) || body.targetChannels.length === 0) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: "Validation error: 'targetChannels' must be a non-empty array of supported channels.",
+          },
+          { status: 400 }
+        );
+      }
+
+      for (const ch of body.targetChannels) {
+        if (!VALID_CHANNELS.includes(ch)) {
+          return NextResponse.json(
+            {
+              success: false,
+              error: `Invalid channel '${String(ch)}'. Supported channels are: website, linkedin, newsletter.`,
+            },
+            { status: 400 }
+          );
+        }
+      }
       updates.targetChannels = body.targetChannels;
     }
 
     // Check if status should be reset due to content edits
-    // Any edit to approved content requires renewed approval!
-    if (contentChanged && existing.status === "approved") {
+    // Any edit to approved/published content requires renewed approval!
+    const wasApprovedOrPublished =
+      existing.status === "approved" ||
+      existing.status === "published" ||
+      existing.status === "partially_published";
+
+    if (contentChanged && wasApprovedOrPublished) {
       updates.status = "in_review";
       updates.approvedAt = null;
     } else if (contentChanged && existing.status === "rejected") {
@@ -182,7 +209,7 @@ export async function PATCH(req: NextRequest, { params }: RouteParams) {
         })),
       },
       contentChanged,
-      approvalReset: contentChanged && existing.status === "approved",
+      approvalReset: contentChanged && wasApprovedOrPublished,
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Internal server error";

@@ -249,9 +249,11 @@ export function ContentReviewModal({
 
       onPostUpdated(data.post);
       setActiveTab("logs");
+      const simulatedCount = data.results?.filter((r: { status: string }) => r.status === "simulated").length || 0;
+      const failedCount = data.results?.filter((r: { status: string }) => r.status === "failed").length || 0;
       setActionMessage({
-        type: "success",
-        text: `Published successfully across ${data.results?.length || selectedChannels.length} channels! Audit records updated.`,
+        type: failedCount > 0 ? "warning" : "success",
+        text: `Automated demonstration dispatch completed for ${data.results?.length || selectedChannels.length} channel(s) (${simulatedCount} simulated sandbox, ${failedCount} failed). Demonstration audit records saved.`,
       });
     } catch (err: unknown) {
       setActionMessage({
@@ -277,14 +279,14 @@ export function ContentReviewModal({
         return (
           <span className="inline-flex items-center gap-1 rounded-full border border-sky-500/30 bg-sky-50 px-2.5 py-0.5 text-xs font-semibold text-sky-700 dark:border-sky-500/30 dark:bg-sky-950/40 dark:text-sky-300">
             <span className="h-1.5 w-1.5 rounded-full bg-sky-500" />
-            Published
+            Demo Completed (Simulated)
           </span>
         );
       case "partially_published":
         return (
           <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-50 px-2.5 py-0.5 text-xs font-semibold text-amber-700 dark:border-amber-500/30 dark:bg-amber-950/40 dark:text-amber-300">
             <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
-            Partially Published
+            Partially Simulated
           </span>
         );
       case "rejected":
@@ -630,14 +632,14 @@ export function ContentReviewModal({
                           </span>
                         </div>
                         {log.publishedUrl && (
-                          <a
-                            href={log.publishedUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="mt-1 block font-mono text-[11px] text-emerald-600 hover:underline dark:text-emerald-400"
-                          >
-                            {log.publishedUrl}
-                          </a>
+                          <div className="mt-1 flex flex-wrap items-center gap-2">
+                            <span className="font-mono text-[11px] text-zinc-600 dark:text-zinc-400 select-all">
+                              {log.publishedUrl}
+                            </span>
+                            <span className="rounded bg-amber-100/70 px-1.5 py-0.5 text-[10px] font-medium text-amber-800 dark:bg-amber-950/50 dark:text-amber-300">
+                              Demo Reference (Simulated)
+                            </span>
+                          </div>
                         )}
                         {log.errorMessage && (
                           <p className="mt-1 text-xs text-rose-600 dark:text-rose-400">
@@ -692,7 +694,7 @@ export function ContentReviewModal({
               title={
                 post.status !== "approved"
                   ? "Content must be explicitly approved before publishing"
-                  : "Trigger automated multi-channel publication"
+                  : "Trigger automated demonstration sandbox publication"
               }
               className="apple-press flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-semibold text-white shadow-xs hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed dark:bg-emerald-600 dark:hover:bg-emerald-500 cursor-pointer"
             >
@@ -702,14 +704,14 @@ export function ContentReviewModal({
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
                   </svg>
-                  <span>Publishing to Channels...</span>
+                  <span>Simulating Channel Dispatch...</span>
                 </>
               ) : (
                 <>
                   <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                     <path strokeLinecap="round" strokeLinejoin="round" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
                   </svg>
-                  <span>Publish to Selected Channels</span>
+                  <span>Publish to Selected Channels (Sandbox)</span>
                 </>
               )}
             </button>

@@ -31,10 +31,11 @@
   - [x] Integrate into `src/app/page.tsx` without breaking Phase 2
 
 - [x] Task 6: Testing, Quality Gates & Documentation
-  - [x] Run `npm test` to ensure all 55 existing tests pass
-  - [x] Add `tests/unit/content-generation.test.ts`
-  - [x] Add `tests/unit/publishing-workflow.test.ts`
-  - [x] Run `npx tsc --noEmit`
-  - [x] Run `npm run lint`
-  - [x] Run `npm run build`
-  - [x] Update `README.md` and `.env.example`
+  - [x] Run `npm test` to ensure all existing Phase 1 & 2 tests pass
+  - [x] Remediate `tests/unit/content-generation.test.ts` to test real `validateGeneratedContentPackage`
+  - [x] Remediate `tests/unit/publishing-workflow.test.ts` to test real `publishContentPost` and sandbox invariants
+  - [x] Ensure 70 unit tests pass across 9 suites
+  - [x] Run `npx tsc --noEmit` (0 errors)
+  - [x] Run `npm run lint` (0 errors)
+  - [x] Run `npm run build` (Turbopack exit 0)
+  - [x] Update `README.md` clarifying Next.js API authoritative execution path and honest simulated statuses

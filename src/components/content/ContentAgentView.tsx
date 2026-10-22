@@ -93,14 +93,14 @@ export function ContentAgentView() {
         return (
           <span className="inline-flex items-center gap-1 rounded-full border border-sky-500/30 bg-sky-50 px-2 py-0.5 text-[11px] font-semibold text-sky-700 dark:border-sky-500/30 dark:bg-sky-950/40 dark:text-sky-300">
             <span className="h-1.5 w-1.5 rounded-full bg-sky-500" />
-            Published
+            Demo Completed
           </span>
         );
       case "partially_published":
         return (
           <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700 dark:border-amber-500/30 dark:bg-amber-950/40 dark:text-amber-300">
             <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
-            Partial
+            Partially Simulated
           </span>
         );
       case "rejected":
@@ -156,11 +156,11 @@ export function ContentAgentView() {
         </div>
 
         <div className="rounded-2xl border border-black/[0.08] bg-white/80 backdrop-blur-xl p-5 shadow-xs dark:border-white/[0.08] dark:bg-zinc-900/60">
-          <div className="text-[11px] font-medium text-sky-600 dark:text-sky-400">Published Live</div>
+          <div className="text-[11px] font-medium text-sky-600 dark:text-sky-400">Demo Completed</div>
           <div className="mt-1 text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
             {publishedCount}
           </div>
-          <div className="mt-1 text-[11px] text-sky-600/80 font-mono">Multi-Channel Broadcast</div>
+          <div className="mt-1 text-[11px] text-sky-600/80 font-mono">Simulated Sandbox Dispatch</div>
         </div>
       </section>
 
@@ -216,7 +216,7 @@ export function ContentAgentView() {
               <option value="draft">Drafts</option>
               <option value="in_review">In Review / Re-approval</option>
               <option value="approved">Approved</option>
-              <option value="published">Published</option>
+              <option value="published">Demo Completed (Simulated)</option>
               <option value="rejected">Rejected</option>
             </select>
           </div>
