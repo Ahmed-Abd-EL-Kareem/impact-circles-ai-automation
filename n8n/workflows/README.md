@@ -104,7 +104,16 @@ DATABASE_URL="postgresql://user:password@ep-xxxx.region.aws.neon.tech/neondb?ssl
 # - Local Next.js + hosted n8n Cloud: Public tunnel URL (e.g. ngrok or Cloudflare Tunnel)
 SANDBOX_BASE_URL="http://localhost:3000"
 SANDBOX_API_KEY="sandbox_demo_secret_key"
+
+# Optional: If your n8n version blocks env vars in nodes/expressions by default:
+N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+# Or allowlist specific variables:
+# N8N_EXPRESSIONS_ALLOWED_ENV_VARS="SANDBOX_BASE_URL,SANDBOX_API_KEY,N8N_WEBHOOK_SECRET,GEMINI_API_KEY,GEMINI_MODEL"
 ```
+
+> **Note on Environment Variable Security in n8n**:
+> Modern n8n versions block `$env` access inside node parameter expressions by default.
+> The `content-publishing.json` workflow encapsulates environment variable resolution defensively inside the preceding Code node (`Format Dispatch Items`), passing `authHeader` in the item stream so HTTP dispatch works out-of-the box even if environment variable access in expressions is restricted.
 
 ---
 

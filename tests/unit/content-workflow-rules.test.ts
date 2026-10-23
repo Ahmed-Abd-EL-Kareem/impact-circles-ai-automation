@@ -643,7 +643,11 @@ export function aggregatePublishingOutcomes(params: {
       successfulChannelNames.add(channel);
       publishedUrl = item.body?.link || item.body?.url || item.body?.shareUrl || null;
     } else {
-      const errText = item.body?.error || item.error?.message || String(item.body || "Dispatch failed");
+      const errText =
+        item.body?.error ||
+        (typeof item.error === "string" ? item.error : item.error?.message) ||
+        item.statusMessage ||
+        String(item.body || "Dispatch failed");
       errorMessage = `${channel.toUpperCase()} API responded with ${item.statusCode}: ${errText}`;
     }
 
@@ -830,6 +834,27 @@ describe("n8n Publishing Sandbox Response Aggregation & Status Transitions", () 
     assert.strictEqual(res.newLogs.length, 1);
     assert.strictEqual(res.newLogs[0].channel, "linkedin");
     assert.strictEqual(res.newLogs[0].status, "published");
+  });
+
+  it("accurately captures string errors when node fails with env access denied", () => {
+    const res = aggregatePublishingOutcomes({
+      postId: "cp_test1",
+      approvedChannels: ["website", "linkedin", "newsletter"],
+      alreadyPublishedLogs: [],
+      dispatchedOutcomes: [
+        { channel: "website", statusCode: 500, body: null, error: "access to env vars denied" },
+        { channel: "linkedin", statusCode: 500, body: null, error: "access to env vars denied" },
+        { channel: "newsletter", statusCode: 500, body: null, error: "access to env vars denied" },
+      ],
+    });
+
+    assert.strictEqual(res.newStatus, "failed");
+    assert.strictEqual(res.success, false);
+    assert.strictEqual(res.newLogs.length, 3);
+    for (const log of res.newLogs) {
+      assert.strictEqual(log.status, "failed");
+      assert.match(log.errorMessage!, /access to env vars denied/);
+    }
   });
 });
 
